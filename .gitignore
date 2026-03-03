@@ -1,0 +1,18 @@
+# Object files and temporary assembly
+*.o
+*.s
+build/
+generated/
+
+# Executables
+ifcc
+a.out
+ret42_final
+ret42_from_ifcc
+*.exe
+
+# Test outputs
+ifcc-test-output/
+
+# Local configuration
+compiler/config.mk
