@@ -1,0 +1,6 @@
+/* Two variables, return second */
+int main() {
+    int a = 10;
+    int b = 20;
+    return b;
+}

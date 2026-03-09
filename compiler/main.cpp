@@ -9,6 +9,9 @@
 #include "generated/ifccBaseVisitor.h"
 
 #include "CodeGenVisitor.h"
+#include "SymbolTableVisitor.h"
+#include "IRGenVisitor.h"
+#include "IR.h"
 
 using namespace antlr4;
 using namespace std;
@@ -40,7 +43,7 @@ int main(int argn, const char **argv)
   tokens.fill();
 
   ifccParser parser(&tokens);
-  tree::ParseTree* tree = parser.axiom();
+  tree::ParseTree* tree = parser.prog();
 
   if(parser.getNumberOfSyntaxErrors() != 0)
   {
@@ -48,9 +51,24 @@ int main(int argn, const char **argv)
       exit(1);
   }
 
-  
-  CodeGenVisitor v;
-  v.visit(tree);
+  // Passe 1 : analyse sémantique (table des symboles + vérifications)
+  SymbolTableVisitor stv;
+  stv.visit(tree);
+
+  if (stv.hasError)
+  {
+      cerr << "error: semantic analysis failed" << endl;
+      exit(1);
+  }
+
+  // Passe 2 : construction de l'IR
+  IRGenVisitor irv;
+  irv.visit(tree);
+
+  // Passe 3 : génération de code assembleur depuis l'IR
+  for (auto cfg : irv.getCFGs()) {
+      cfg->gen_asm(cout);
+  }
 
   return 0;
 }

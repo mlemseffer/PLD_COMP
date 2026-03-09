@@ -18,7 +18,10 @@ OBJECTS=build/ifccBaseVisitor.o \
 	build/ifccVisitor.o \
 	build/ifccParser.o \
 	build/main.o \
-	build/CodeGenVisitor.o
+	build/CodeGenVisitor.o \
+	build/SymbolTableVisitor.o \
+	build/IR.o \
+	build/IRGenVisitor.o
 
 ifcc: $(OBJECTS)
 	@mkdir -p build
@@ -69,3 +72,12 @@ gui:
 clean:
 	rm -rf build generated
 	rm -f ifcc
+	rm -f compiler_error.log out.log
+	# Nettoyer les fichiers générés dans testfiles/
+	rm -f ../testfiles/*.s
+	rm -f ../testfiles/test_results.txt
+	# Supprimer les binaires compilés dans testfiles/ (fichiers sans extension, exécutables)
+	find ../testfiles -maxdepth 1 -type f ! -name '*.c' ! -name '*.sh' ! -name '*.txt' -executable -delete 2>/dev/null || true
+	find ../testfiles -maxdepth 1 -type f ! -name '*.*' -delete 2>/dev/null || true
+	# Nettoyer le dossier de sortie des tests
+	rm -rf ../ifcc-test-output

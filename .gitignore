@@ -16,3 +16,4 @@ ifcc-test-output/
 
 # Local configuration
 compiler/config.mk
+localconfig.txt
