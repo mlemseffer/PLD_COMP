@@ -155,6 +155,21 @@ void IRInstr::gen_asm(ostream &o) {
 
         case call: {
             int numArgs = params.size() - 2;
+            int extraArgs = (numArgs > 6) ? (numArgs - 6) : 0;
+            int padding = (extraArgs % 2 != 0) ? 8 : 0;
+            
+            // Aligner rsp sur 16 octets avant d'empiler (si impair)
+            if (padding > 0) {
+                o << "    subq $" << padding << ", %rsp\n";
+            }
+            
+            // Empiler les arguments supplémentaires (de droite à gauche)
+            for (int i = numArgs - 1; i >= 6; --i) {
+                string argMem = bb->cfg->IR_reg_to_asm(params[i + 2]);
+                o << "    movslq " << argMem << ", %rax\n";
+                o << "    pushq %rax\n";
+            }
+
             string argRegs[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
             
             for (int i = 0; i < numArgs && i < 6; ++i) {
@@ -169,6 +184,12 @@ void IRInstr::gen_asm(ostream &o) {
             #else
             o << "    call " << params[1] << "\n";
             #endif
+            
+            // Nettoyer la pile après l'appel
+            int totalCleanup = (extraArgs * 8) + padding;
+            if (totalCleanup > 0) {
+                o << "    addq $" << totalCleanup << ", %rsp\n";
+            }
             
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    movl %eax, " << dest << "\n";
@@ -360,6 +381,13 @@ string CFG::IR_reg_to_asm(string reg) {
     if (reg == "!ecx") return "%ecx";
     if (reg == "!r8d") return "%r8d";
     if (reg == "!r9d") return "%r9d";
+
+    // Si c'est un paramètre sur la pile (au-delà du 6ème)
+    if (reg.find("!param") == 0) {
+        int index = stoi(reg.substr(6));
+        int offset = 16 + (index - 6) * 8;
+        return to_string(offset) + "(%rbp)";
+    }
 
     // Convertit un nom de variable IR en adresse mémoire x86
     int index = SymbolIndex[reg];

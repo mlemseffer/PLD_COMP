@@ -363,6 +363,58 @@ movl %ecx, (%rax)          # écrire dans x via l'adresse
 
 ---
 
+### 4.19 — Tableaux unidimensionnels
+
+**Objectif** : Permettre la déclaration de tableaux de taille constante et l'accès à leurs éléments.
+
+**Implémentation** :
+- **Grammaire** (`ifcc.g4`) :
+  - `declaration_array : type VAR '[' CONST ']' ';'`
+  - `lvalue_array : VAR '[' expr ']'`
+  - `arrayAccessExpr : VAR '[' expr ']'`
+- **Gestion Mémoire (`IR.cpp`)** : 
+  - Ajout de `add_array_to_symbol_table` qui alloue `$taille_element * nb_elements` sur la pile (aligné sur 8 octets pour les `double`).
+- **Évaluation `ArrayAccessExpr` (rvalue)** : 
+  1. On évalue l'expression de l'index.
+  2. On calcule physiquement l'offset mémoire : `offset_temporaire = index_temporaire * taille_element`.
+  3. L'instruction IR `add_addr` décale l'adresse de base du tableau avec cet offset pour obtenir l'adresse de l'élément : `addr_element = addr_base + offset`.
+  4. On émet un `rmem` (ou `rmem_double`) pour charger la valeur contenue à cette adresse depuis la pile vers un registre temporaire.
+- **Affectation tableau (`LvalueArray`)** : Grâce à la généricité de l'étape 4.18, `visitLvalueArray` évalue l'index, calcule l'adresse en mémoire et génère l'adresse temporaire. L'affectation utilise alors l'instruction de base `wmem`.
+
+**Exemple testé** :
+```c
+int a[5]; 
+a[2] = 42; 
+return a[2];  /* Return 42 */
+```
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.cpp`, `IR.h`, `IR.cpp`
+
+---
+
+### 4.20 — Appels de fonction ayant plus de 6 arguments
+
+**Objectif** : Respecter pleinement l'ABI System V AMD64 qui spécifie que les 6 premiers arguments passent par les registres et que les suivants sont empilés.
+
+**Implémentation** :
+- **Appelant (`IRInstr::call` dans `IR.cpp`)** :
+  - Identifie s'il y a plus de 6 arguments.
+  - S'il y a un nombre impair d'arguments sur la pile (par exemple le 7ème), l'ABI impose d'aligner `%rsp` sur 16 octets _avant_ le `call`. Le compilateur génère donc un `subq $8, %rsp`.
+  - Empile les arguments à partir du 7e, **de la droite vers la gauche**, via la séquence `movslq src, %rax` ; `pushq %rax`.
+  - Charge les 6 premiers arguments dans les registres classiques.
+  - Exécute l'instruction `call`.
+  - Nettoie sa propre pile de paramètres en réajustant le stack pointer : `addq $TotalStackParamsSize, %rsp`.
+- **Appelé (`IRGenVisitor::visitFunction_def`)** :
+  - Les 6 premiers paramètres sont transférés depuis les registres vers la pile locale (-X(%rbp)).
+  - Les paramètres restants (index 6, 7...) utilisent une adresse *positive* basée sur le ressentiment depuis la pile (caller-stack frame). Ils sont identifiés par les pseudo-registres `!param6`, `!param7`, etc.
+  - La fonction `IR_reg_to_asm` lit l'identifiant `!paramX` et le traduit statiquement en l'offset mémoire positif correspondant : `16 + (X-6)*8 (%rbp)`.
+
+**Exemple testé** : `my_sum_10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)` testé avec succès (return 55).
+
+**Fichiers modifiés** : `IR.cpp`, `IRGenVisitor.cpp`
+
+---
+
 ## Grammaire complète
 
 ```antlr

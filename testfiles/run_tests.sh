@@ -81,6 +81,16 @@ run_test "$TESTDIR/34_chain_mul.c"         24
 run_test "$TESTDIR/35_unary_paren.c"       251
 run_test "$TESTDIR/36_priority_sub.c"      4
 
+# --- Tests appels de fonctions & controles ---
+run_test "$TESTDIR/37_putchar.c"           0
+run_test "$TESTDIR/38_call_8args.c"        0
+run_test "$TESTDIR/38_call_10args.c"       0
+run_test "$TESTDIR/38_call_mixed_funcs.c"  44
+run_test "$TESTDIR/39_recursive_factorial.c" 120
+run_test "$TESTDIR/40_multi_return.c"      45
+run_test "$TESTDIR/41_while_factorial.c"   120
+run_test "$TESTDIR/42_const_prop.c"        51
+
 echo "========================================="
 echo "  Results: $PASS/$TOTAL passed, $FAIL failed"
 echo "========================================="

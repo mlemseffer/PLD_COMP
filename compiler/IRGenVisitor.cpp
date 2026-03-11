@@ -124,20 +124,25 @@ antlrcpp::Any IRGenVisitor::visitFunction_def(ifccParser::Function_defContext *c
         auto varNodes = ctx->parameters()->VAR();
         
         for (size_t i = 0; i < varNodes.size(); i++) {
+            string paramName = varNodes[i]->getText();
+            Type paramType = parseType(typeNodes[i]);
+            current_cfg->add_to_symbol_table(paramName, paramType);
+            
             if (paramCount < 6) {
-                string paramName = varNodes[i]->getText();
-                Type paramType = parseType(typeNodes[i]);
-                current_cfg->add_to_symbol_table(paramName, paramType);
                 if (paramType == DOUBLE) {
-                    // Les doubles sont passés via %xmm0-%xmm7 dans l'ABI System V
-                    // Pour simplifier, on ne gère que les int via registres pour l'instant
-                    // et on traite les doubles comme des copies (à étendre si nécessaire)
                     current_cfg->current_bb->add_IRInstr(IRInstr::copy, INT, {paramName, argRegs[paramCount]});
                 } else {
                     current_cfg->current_bb->add_IRInstr(IRInstr::copy, INT, {paramName, argRegs[paramCount]});
                 }
-                paramCount++;
+            } else {
+                string paramReg = "!param" + to_string(paramCount);
+                if (paramType == DOUBLE) {
+                    current_cfg->current_bb->add_IRInstr(IRInstr::copy_double, DOUBLE, {paramName, paramReg});
+                } else {
+                    current_cfg->current_bb->add_IRInstr(IRInstr::copy, INT, {paramName, paramReg});
+                }
             }
+            paramCount++;
         }
     }
 
