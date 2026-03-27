@@ -1,5 +1,16 @@
 #include "IRGenVisitor.h"
 #include <cstring>
+#include <any>
+#include <type_traits>
+
+template<typename T, typename AnyType>
+T castAny(AnyType a) {
+    if constexpr (std::is_same_v<AnyType, std::any>) {
+        return std::any_cast<T>(a);
+    } else {
+        return a.template as<T>();
+    }
+}
 
 // ===== Collecte des variables affectées dans un sous-arbre AST =====
 set<string> IRGenVisitor::collectAssignedVars(antlr4::tree::ParseTree* tree) {
@@ -175,7 +186,7 @@ antlrcpp::Any IRGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx) {
     string varName = declareScopedVariable(originalName);
     current_cfg->add_to_symbol_table(varName, declType);
 
-    ExprValue exprResult = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue exprResult = castAny<ExprValue>(this->visit(ctx->expr()));
 
     // Conversion implicite si nécessaire
     if (exprResult.type != declType) {
@@ -234,10 +245,10 @@ antlrcpp::Any IRGenVisitor::visitDeclArray(ifccParser::DeclArrayContext *ctx) {
 
 antlrcpp::Any IRGenVisitor::visitAssignExpr(ifccParser::AssignExprContext *ctx) {
     // 1. Évaluer la rvalue (expression à droite du '=')
-    ExprValue exprResult = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue exprResult = castAny<ExprValue>(this->visit(ctx->expr()));
 
     // 2. Évaluer la lvalue (expression à gauche du '=') → obtenir l'adresse cible
-    LvalueResult lv = this->visit(ctx->lvalue()).as<LvalueResult>();
+    LvalueResult lv = castAny<LvalueResult>(this->visit(ctx->lvalue()));
     Type varType = lv.type;
 
     // 3. Conversion implicite de la rvalue vers le type de la lvalue
@@ -307,7 +318,7 @@ antlrcpp::Any IRGenVisitor::visitLvalueArray(ifccParser::LvalueArrayContext *ctx
     Type elemType = current_cfg->get_array_element_type(varName);
     int elemSize = typeSize(elemType);
 
-    ExprValue indexExpr = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue indexExpr = castAny<ExprValue>(this->visit(ctx->expr()));
 
     string baseAddr = current_cfg->create_new_tempvar(ADDR);
     current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {baseAddr, varName});
@@ -328,7 +339,7 @@ antlrcpp::Any IRGenVisitor::visitLvalueArray(ifccParser::LvalueArrayContext *ctx
 }
 
 antlrcpp::Any IRGenVisitor::visitReturn_stmt(ifccParser::Return_stmtContext *ctx) {
-    ExprValue exprResult = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue exprResult = castAny<ExprValue>(this->visit(ctx->expr()));
     Type retType = current_cfg->returnType;
 
     if (exprResult.type != retType) {
@@ -447,7 +458,7 @@ antlrcpp::Any IRGenVisitor::visitArrayAccessExpr(ifccParser::ArrayAccessExprCont
     Type elemType = current_cfg->get_array_element_type(varName);
     int elemSize = typeSize(elemType);
 
-    ExprValue indexExpr = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue indexExpr = castAny<ExprValue>(this->visit(ctx->expr()));
 
     string baseAddr = current_cfg->create_new_tempvar(ADDR);
     current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {baseAddr, varName});
@@ -477,8 +488,8 @@ antlrcpp::Any IRGenVisitor::visitArrayAccessExpr(ifccParser::ArrayAccessExprCont
 }
 
 antlrcpp::Any IRGenVisitor::visitMulDivModExpr(ifccParser::MulDivModExprContext *ctx) {
-    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
-    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
     string op = ctx->children[1]->getText();
 
     Type resultType = (op == "%") ? INT : promoteType(left.type, right.type);
@@ -547,8 +558,8 @@ antlrcpp::Any IRGenVisitor::visitMulDivModExpr(ifccParser::MulDivModExprContext 
 }
 
 antlrcpp::Any IRGenVisitor::visitAddSubExpr(ifccParser::AddSubExprContext *ctx) {
-    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
-    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
     string op = ctx->children[1]->getText();
 
     Type resultType = promoteType(left.type, right.type);
@@ -607,7 +618,7 @@ antlrcpp::Any IRGenVisitor::visitAddSubExpr(ifccParser::AddSubExprContext *ctx) 
 }
 
 antlrcpp::Any IRGenVisitor::visitUnaryMinusExpr(ifccParser::UnaryMinusExprContext *ctx) {
-    ExprValue src = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue src = castAny<ExprValue>(this->visit(ctx->expr()));
 
     if (src.isConstant) {
         ExprValue result;
@@ -651,7 +662,7 @@ antlrcpp::Any IRGenVisitor::visitUnaryMinusExpr(ifccParser::UnaryMinusExprContex
 }
 
 antlrcpp::Any IRGenVisitor::visitLogicalNotExpr(ifccParser::LogicalNotExprContext *ctx) {
-    ExprValue src = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue src = castAny<ExprValue>(this->visit(ctx->expr()));
 
     // Constant folding
     if (src.isConstant) {
@@ -688,8 +699,8 @@ antlrcpp::Any IRGenVisitor::visitLogicalNotExpr(ifccParser::LogicalNotExprContex
 }
 
 antlrcpp::Any IRGenVisitor::visitBitAndExpr(ifccParser::BitAndExprContext *ctx) {
-    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
-    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
 
     // Constant folding (int only)
     if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
@@ -717,8 +728,8 @@ antlrcpp::Any IRGenVisitor::visitBitAndExpr(ifccParser::BitAndExprContext *ctx) 
 }
 
 antlrcpp::Any IRGenVisitor::visitBitXorExpr(ifccParser::BitXorExprContext *ctx) {
-    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
-    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
 
     if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
         ExprValue result;
@@ -745,8 +756,8 @@ antlrcpp::Any IRGenVisitor::visitBitXorExpr(ifccParser::BitXorExprContext *ctx) 
 }
 
 antlrcpp::Any IRGenVisitor::visitBitOrExpr(ifccParser::BitOrExprContext *ctx) {
-    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
-    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
 
     if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
         ExprValue result;
@@ -781,7 +792,7 @@ antlrcpp::Any IRGenVisitor::visitCallExpr(ifccParser::CallExprContext *ctx) {
     vector<string> args;
     
     for (auto exprCtx : ctx->expr()) {
-        ExprValue argVal = this->visit(exprCtx).as<ExprValue>();
+        ExprValue argVal = castAny<ExprValue>(this->visit(exprCtx));
         args.push_back(materialize(argVal));
     }
     
@@ -817,7 +828,7 @@ antlrcpp::Any IRGenVisitor::visitIfStmt(ifccParser::IfStmtContext *ctx) {
         modifiedVars.insert(vars.begin(), vars.end());
     }
 
-    ExprValue cond = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue cond = castAny<ExprValue>(this->visit(ctx->expr()));
     string condVar = cond.isConstant ? loadConst(cond.value) : cond.varName;
     
     if (cond.type == DOUBLE && !cond.isConstant) {
@@ -873,8 +884,8 @@ antlrcpp::Any IRGenVisitor::visitIfStmt(ifccParser::IfStmtContext *ctx) {
 }
 
 antlrcpp::Any IRGenVisitor::visitEqExpr(ifccParser::EqExprContext *ctx) {
-    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
-    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
     string op = ctx->children[1]->getText();
 
     if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
@@ -917,8 +928,8 @@ antlrcpp::Any IRGenVisitor::visitEqExpr(ifccParser::EqExprContext *ctx) {
 }
 
 antlrcpp::Any IRGenVisitor::visitRelExpr(ifccParser::RelExprContext *ctx) {
-    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
-    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
     string op = ctx->children[1]->getText();
 
     if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
@@ -981,7 +992,7 @@ antlrcpp::Any IRGenVisitor::visitWhileStmt(ifccParser::WhileStmtContext *ctx) {
     current_cfg->current_bb->exit_false = nullptr;
 
     current_cfg->add_bb(bb_cond);
-    ExprValue cond = this->visit(ctx->expr()).as<ExprValue>();
+    ExprValue cond = castAny<ExprValue>(this->visit(ctx->expr()));
     string condVar = cond.isConstant ? loadConst(cond.value) : cond.varName;
     current_cfg->current_bb->test_var_name = condVar;
     current_cfg->current_bb->exit_true = bb_body;
