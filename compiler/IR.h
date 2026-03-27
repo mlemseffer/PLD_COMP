@@ -50,7 +50,12 @@ class IRInstr {
 		cmp_ge,
 		wmem_double, // write memory (double): params = [addr_var, value_var]
 		lea,       // load effective address: params = [dest, src_var] — dest = &src_var
-		add_addr   // address arithmetic: params = [dest, addr, offset] — dest = addr + offset (all 8-byte)
+		add_addr,  // address arithmetic: params = [dest, addr, offset] — dest = addr + offset (all 8-byte)
+		mod_int,   // modulo entier (idivl, résultat dans %edx)
+		bit_and,   // AND bit-à-bit
+		bit_xor,   // XOR bit-à-bit
+		bit_or,    // OR bit-à-bit
+		logical_not // NOT logique : !x (0→1, non-zéro→0)
 	} Operation;
 
 

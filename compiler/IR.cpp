@@ -303,6 +303,54 @@ void IRInstr::gen_asm(ostream &o) {
             break;
         }
 
+        case mod_int:
+            // params = [dest, src1, src2] → dest = src1 % src2
+            src1 = bb->cfg->IR_reg_to_asm(params[1]);
+            src2 = bb->cfg->IR_reg_to_asm(params[2]);
+            dest = bb->cfg->IR_reg_to_asm(params[0]);
+            o << "    movl " << src1 << ", %eax\n";
+            o << "    cltd\n";  // sign-extend eax → edx:eax
+            o << "    idivl " << src2 << "\n";
+            o << "    movl %edx, " << dest << "\n";  // remainder in %edx
+            break;
+
+        case bit_and:
+            src1 = bb->cfg->IR_reg_to_asm(params[1]);
+            src2 = bb->cfg->IR_reg_to_asm(params[2]);
+            dest = bb->cfg->IR_reg_to_asm(params[0]);
+            o << "    movl " << src1 << ", %eax\n";
+            o << "    andl " << src2 << ", %eax\n";
+            o << "    movl %eax, " << dest << "\n";
+            break;
+
+        case bit_xor:
+            src1 = bb->cfg->IR_reg_to_asm(params[1]);
+            src2 = bb->cfg->IR_reg_to_asm(params[2]);
+            dest = bb->cfg->IR_reg_to_asm(params[0]);
+            o << "    movl " << src1 << ", %eax\n";
+            o << "    xorl " << src2 << ", %eax\n";
+            o << "    movl %eax, " << dest << "\n";
+            break;
+
+        case bit_or:
+            src1 = bb->cfg->IR_reg_to_asm(params[1]);
+            src2 = bb->cfg->IR_reg_to_asm(params[2]);
+            dest = bb->cfg->IR_reg_to_asm(params[0]);
+            o << "    movl " << src1 << ", %eax\n";
+            o << "    orl " << src2 << ", %eax\n";
+            o << "    movl %eax, " << dest << "\n";
+            break;
+
+        case logical_not:
+            // params = [dest, src] → dest = (src == 0) ? 1 : 0
+            src1 = bb->cfg->IR_reg_to_asm(params[1]);
+            dest = bb->cfg->IR_reg_to_asm(params[0]);
+            o << "    cmpl $0, " << src1 << "\n";
+            o << "    sete %al\n";
+            o << "    movzbl %al, %eax\n";
+            o << "    movl %eax, " << dest << "\n";
+            break;
+
         default:
             o << "    # unsupported IR instruction\n";
             break;

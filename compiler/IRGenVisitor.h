@@ -32,17 +32,22 @@ public:
     virtual antlrcpp::Any visitFunction_def(ifccParser::Function_defContext *ctx) override;
     virtual antlrcpp::Any visitDeclVar(ifccParser::DeclVarContext *ctx) override;
     virtual antlrcpp::Any visitDeclArray(ifccParser::DeclArrayContext *ctx) override;
-    virtual antlrcpp::Any visitAffectation(ifccParser::AffectationContext *ctx) override;
+    virtual antlrcpp::Any visitAssignExpr(ifccParser::AssignExprContext *ctx);
     virtual antlrcpp::Any visitLvalueVar(ifccParser::LvalueVarContext *ctx);
     virtual antlrcpp::Any visitLvalueArray(ifccParser::LvalueArrayContext *ctx);
     virtual antlrcpp::Any visitReturn_stmt(ifccParser::Return_stmtContext *ctx) override;
     virtual antlrcpp::Any visitConstExpr(ifccParser::ConstExprContext *ctx) override;
     virtual antlrcpp::Any visitConstDoubleExpr(ifccParser::ConstDoubleExprContext *ctx) override;
+    virtual antlrcpp::Any visitCharExpr(ifccParser::CharExprContext *ctx) override;
     virtual antlrcpp::Any visitVarExpr(ifccParser::VarExprContext *ctx) override;
     virtual antlrcpp::Any visitArrayAccessExpr(ifccParser::ArrayAccessExprContext *ctx) override;
-    virtual antlrcpp::Any visitMulDivExpr(ifccParser::MulDivExprContext *ctx) override;
+    virtual antlrcpp::Any visitMulDivModExpr(ifccParser::MulDivModExprContext *ctx) override;
     virtual antlrcpp::Any visitAddSubExpr(ifccParser::AddSubExprContext *ctx) override;
     virtual antlrcpp::Any visitUnaryMinusExpr(ifccParser::UnaryMinusExprContext *ctx) override;
+    virtual antlrcpp::Any visitLogicalNotExpr(ifccParser::LogicalNotExprContext *ctx) override;
+    virtual antlrcpp::Any visitBitAndExpr(ifccParser::BitAndExprContext *ctx) override;
+    virtual antlrcpp::Any visitBitXorExpr(ifccParser::BitXorExprContext *ctx) override;
+    virtual antlrcpp::Any visitBitOrExpr(ifccParser::BitOrExprContext *ctx) override;
     virtual antlrcpp::Any visitParenExpr(ifccParser::ParenExprContext *ctx) override;
     virtual antlrcpp::Any visitCallExpr(ifccParser::CallExprContext *ctx) override;
     virtual antlrcpp::Any visitBlock(ifccParser::BlockContext *ctx) override;
@@ -61,14 +66,32 @@ private:
     // Parse le type depuis un noeud 'type' de la grammaire
     Type parseType(ifccParser::TypeContext* ctx);
 
+    // Environnement pour renommer les variables (shadowing)
+    vector<map<string, string>> scopeStack;
+    void pushScope() { scopeStack.push_back({}); }
+    void popScope() { if (!scopeStack.empty()) scopeStack.pop_back(); }
+    string declareScopedVariable(string name) {
+        string uniqueName = name + "_" + to_string(nextVarIndex++);
+        if (!scopeStack.empty()) {
+            scopeStack.back()[name] = uniqueName;
+        }
+        return uniqueName;
+    }
+    string getScopedName(string name) {
+        for (int i = scopeStack.size() - 1; i >= 0; --i) {
+            if (scopeStack[i].count(name)) return scopeStack[i].at(name);
+        }
+        return name; // fallback
+    }
+    int nextVarIndex = 0;
+
     // Émet une instruction de conversion int→double ou double→int si nécessaire.
-    // Retourne le varName du résultat (converti ou inchangé).
     string emitConversion(ExprValue& val, Type targetType);
 
     // Matérialise un ExprValue constant en variable temporaire si besoin
     string materialize(ExprValue& val);
 
-    // ===== Propagation des variables constantes (tâche 4.16) =====
+    // ===== Propagation des variables constantes =====
     map<string, int> constMap;
     set<string> collectAssignedVars(antlr4::tree::ParseTree* tree);
 

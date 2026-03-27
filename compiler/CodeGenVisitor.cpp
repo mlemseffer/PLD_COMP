@@ -2,7 +2,6 @@
 
 antlrcpp::Any CodeGenVisitor::visitProg(ifccParser::ProgContext *ctx) 
 {
-    // Visiter chaque définition de fonction
     for (auto func : ctx->function_def()) {
         this->visit(func);
     }
@@ -20,19 +19,15 @@ antlrcpp::Any CodeGenVisitor::visitFunction_def(ifccParser::Function_defContext 
     std::cout<< " " << funcName << ": \n" ;
     #endif
 
-    // Prologue : sauvegarder %rbp et réserver de l'espace sur la pile
     std::cout << "    pushq %rbp\n";
     std::cout << "    movq %rsp, %rbp\n";
-    // Réserver de l'espace pour toutes les variables (arrondi à un multiple de 16 pour l'alignement)
     int stackSize = ((int)symbolTable.size() * 4 + 15) & ~15;
     std::cout << "    subq $" << stackSize << ", %rsp\n";
 
-    // Visiter toutes les instructions (déclarations, affectations, return)
     for (auto stmt : ctx->statement()) {
         this->visit(stmt);
     }
 
-    // Épilogue
     std::cout << "    leave\n";
     std::cout << "    ret\n";
 
@@ -44,10 +39,8 @@ antlrcpp::Any CodeGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx)
     std::string varName = ctx->VAR()->getText();
     int index = symbolTable[varName];
 
-    // Évaluer l'expression (résultat dans %eax)
     this->visit(ctx->expr());
 
-    // Stocker %eax dans la variable sur la pile
     std::cout << "    movl %eax, -" << index << "(%rbp)\n";
 
     return 0;
@@ -55,11 +48,10 @@ antlrcpp::Any CodeGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx)
 
 antlrcpp::Any CodeGenVisitor::visitDeclArray(ifccParser::DeclArrayContext *ctx)
 {
-    // Déclaration de tableau sans initialisation — rien à faire côté CodeGen legacy
     return 0;
 }
 
-antlrcpp::Any CodeGenVisitor::visitAffectation(ifccParser::AffectationContext *ctx)
+antlrcpp::Any CodeGenVisitor::visitAssignExpr(ifccParser::AssignExprContext *ctx)
 {
     std::string varName;
     if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(ctx->lvalue())) {
@@ -67,21 +59,17 @@ antlrcpp::Any CodeGenVisitor::visitAffectation(ifccParser::AffectationContext *c
     }
     int index = symbolTable[varName];
 
-    // Évaluer l'expression (résultat dans %eax)
     this->visit(ctx->expr());
 
-    // Stocker %eax dans la variable sur la pile
     std::cout << "    movl %eax, -" << index << "(%rbp)\n";
+    // %eax still contains the assigned value (for chaining)
 
     return 0;
 }
 
 antlrcpp::Any CodeGenVisitor::visitReturn_stmt(ifccParser::Return_stmtContext *ctx)
 {
-    // Évaluer l'expression (résultat dans %eax)
     this->visit(ctx->expr());
-
-    // %eax contient déjà la valeur de retour
     return 0;
 }
 
@@ -89,6 +77,28 @@ antlrcpp::Any CodeGenVisitor::visitConstExpr(ifccParser::ConstExprContext *ctx)
 {
     int val = stoi(ctx->CONST()->getText());
     std::cout << "    movl $" << val << ", %eax\n";
+    return 0;
+}
+
+antlrcpp::Any CodeGenVisitor::visitCharExpr(ifccParser::CharExprContext *ctx)
+{
+    std::string text = ctx->CHAR_CONST()->getText();
+    std::string inner = text.substr(1, text.size() - 2);
+    int charValue = 0;
+    if (inner.size() == 1) {
+        charValue = (unsigned char)inner[0];
+    } else if (inner.size() == 2 && inner[0] == '\\') {
+        switch (inner[1]) {
+            case 'n': charValue = '\n'; break;
+            case 'r': charValue = '\r'; break;
+            case 't': charValue = '\t'; break;
+            case '0': charValue = '\0'; break;
+            case '\\': charValue = '\\'; break;
+            case '\'': charValue = '\''; break;
+            default: charValue = (unsigned char)inner[1]; break;
+        }
+    }
+    std::cout << "    movl $" << charValue << ", %eax\n";
     return 0;
 }
 
@@ -100,52 +110,95 @@ antlrcpp::Any CodeGenVisitor::visitVarExpr(ifccParser::VarExprContext *ctx)
     return 0;
 }
 
-antlrcpp::Any CodeGenVisitor::visitMulDivExpr(ifccParser::MulDivExprContext *ctx)
+antlrcpp::Any CodeGenVisitor::visitMulDivModExpr(ifccParser::MulDivModExprContext *ctx)
 {
-    this->visit(ctx->expr(0));          // fils gauche → %eax
-    std::cout << "    pushq %rax\n";    // sauver sur la pile
-    this->visit(ctx->expr(1));          // fils droit → %eax
-    std::cout << "    popq %rbx\n";     // récupérer fils gauche dans %ebx
+    this->visit(ctx->expr(0));
+    std::cout << "    pushq %rax\n";
+    this->visit(ctx->expr(1));
+    std::cout << "    popq %rbx\n";
 
     std::string op = ctx->children[1]->getText();
     if (op == "*") {
-        std::cout << "    imull %ebx, %eax\n";  // %eax = %ebx * %eax
-    } else {
-        // division : on veut gauche / droit = %ebx / %eax
-        std::cout << "    movl %eax, %ecx\n";   // diviseur dans %ecx
-        std::cout << "    movl %ebx, %eax\n";   // dividende dans %eax
-        std::cout << "    cltd\n";               // sign-extend %eax → %edx:%eax
-        std::cout << "    idivl %ecx\n";         // %eax = quotient
+        std::cout << "    imull %ebx, %eax\n";
+    } else if (op == "/") {
+        std::cout << "    movl %eax, %ecx\n";
+        std::cout << "    movl %ebx, %eax\n";
+        std::cout << "    cltd\n";
+        std::cout << "    idivl %ecx\n";
+    } else { // %
+        std::cout << "    movl %eax, %ecx\n";
+        std::cout << "    movl %ebx, %eax\n";
+        std::cout << "    cltd\n";
+        std::cout << "    idivl %ecx\n";
+        std::cout << "    movl %edx, %eax\n";
     }
     return 0;
 }
 
 antlrcpp::Any CodeGenVisitor::visitAddSubExpr(ifccParser::AddSubExprContext *ctx)
 {
-    this->visit(ctx->expr(0));          // fils gauche → %eax
-    std::cout << "    pushq %rax\n";    // sauver sur la pile
-    this->visit(ctx->expr(1));          // fils droit → %eax
-    std::cout << "    popq %rbx\n";     // récupérer fils gauche dans %ebx
+    this->visit(ctx->expr(0));
+    std::cout << "    pushq %rax\n";
+    this->visit(ctx->expr(1));
+    std::cout << "    popq %rbx\n";
 
     std::string op = ctx->children[1]->getText();
     if (op == "+") {
-        std::cout << "    addl %ebx, %eax\n";  // %eax = %ebx + %eax
+        std::cout << "    addl %ebx, %eax\n";
     } else {
-        // soustraction : on veut gauche - droit = %ebx - %eax
-        std::cout << "    subl %eax, %ebx\n";  // %ebx = %ebx - %eax
-        std::cout << "    movl %ebx, %eax\n";  // résultat dans %eax
+        std::cout << "    subl %eax, %ebx\n";
+        std::cout << "    movl %ebx, %eax\n";
     }
     return 0;
 }
 
 antlrcpp::Any CodeGenVisitor::visitUnaryMinusExpr(ifccParser::UnaryMinusExprContext *ctx)
 {
-    this->visit(ctx->expr());           // évalue l'expression → %eax
-    std::cout << "    negl %eax\n";     // %eax = -%eax
+    this->visit(ctx->expr());
+    std::cout << "    negl %eax\n";
+    return 0;
+}
+
+antlrcpp::Any CodeGenVisitor::visitLogicalNotExpr(ifccParser::LogicalNotExprContext *ctx)
+{
+    this->visit(ctx->expr());
+    std::cout << "    cmpl $0, %eax\n";
+    std::cout << "    sete %al\n";
+    std::cout << "    movzbl %al, %eax\n";
+    return 0;
+}
+
+antlrcpp::Any CodeGenVisitor::visitBitAndExpr(ifccParser::BitAndExprContext *ctx)
+{
+    this->visit(ctx->expr(0));
+    std::cout << "    pushq %rax\n";
+    this->visit(ctx->expr(1));
+    std::cout << "    popq %rbx\n";
+    std::cout << "    andl %ebx, %eax\n";
+    return 0;
+}
+
+antlrcpp::Any CodeGenVisitor::visitBitXorExpr(ifccParser::BitXorExprContext *ctx)
+{
+    this->visit(ctx->expr(0));
+    std::cout << "    pushq %rax\n";
+    this->visit(ctx->expr(1));
+    std::cout << "    popq %rbx\n";
+    std::cout << "    xorl %ebx, %eax\n";
+    return 0;
+}
+
+antlrcpp::Any CodeGenVisitor::visitBitOrExpr(ifccParser::BitOrExprContext *ctx)
+{
+    this->visit(ctx->expr(0));
+    std::cout << "    pushq %rax\n";
+    this->visit(ctx->expr(1));
+    std::cout << "    popq %rbx\n";
+    std::cout << "    orl %ebx, %eax\n";
     return 0;
 }
 
 antlrcpp::Any CodeGenVisitor::visitParenExpr(ifccParser::ParenExprContext *ctx)
 {
-    return this->visit(ctx->expr());    // juste évaluer ce qu'il y a entre parenthèses
+    return this->visit(ctx->expr());
 }

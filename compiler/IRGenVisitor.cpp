@@ -4,15 +4,16 @@
 // ===== Collecte des variables affectées dans un sous-arbre AST =====
 set<string> IRGenVisitor::collectAssignedVars(antlr4::tree::ParseTree* tree) {
     set<string> result;
-    if (auto* affCtx = dynamic_cast<ifccParser::AffectationContext*>(tree)) {
-        // lvalue peut être lvalueVar ou lvalueArray
-        if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(affCtx->lvalue())) {
-            result.insert(lvVar->VAR()->getText());
-        } else if (auto* lvArr = dynamic_cast<ifccParser::LvalueArrayContext*>(affCtx->lvalue())) {
-            result.insert(lvArr->VAR()->getText());
+    if (auto* assignCtx = dynamic_cast<ifccParser::AssignExprContext*>(tree)) {
+        if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(assignCtx->lvalue())) {
+            result.insert(getScopedName(lvVar->VAR()->getText()));
+        } else if (auto* lvArr = dynamic_cast<ifccParser::LvalueArrayContext*>(assignCtx->lvalue())) {
+            result.insert(getScopedName(lvArr->VAR()->getText()));
         }
     }
     if (auto* declCtx = dynamic_cast<ifccParser::DeclVarContext*>(tree)) {
+        // We do not know the scoped name yet, so we just use the original name as a fallback.
+        // It's a new variable anyway, so it shouldn't affect outer constants.
         result.insert(declCtx->VAR()->getText());
     }
     if (auto* declArrCtx = dynamic_cast<ifccParser::DeclArrayContext*>(tree)) {
@@ -28,7 +29,9 @@ set<string> IRGenVisitor::collectAssignedVars(antlr4::tree::ParseTree* tree) {
 // ===== Helpers =====
 
 Type IRGenVisitor::parseType(ifccParser::TypeContext* ctx) {
-    if (ctx->getText() == "double") return DOUBLE;
+    string text = ctx->getText();
+    if (text == "double") return DOUBLE;
+    if (text == "void") return VOID;
     return INT;
 }
 
@@ -40,22 +43,18 @@ string IRGenVisitor::loadConst(int value) {
 
 string IRGenVisitor::loadConstDouble(double value) {
     string dest = current_cfg->create_new_tempvar(DOUBLE);
-    // Créer un label dans .rodata pour cette constante
     string label = ".LCD_" + current_cfg->funcName + "_" + to_string(nextDoubleConstIndex++);
     current_cfg->doubleConstants.push_back({label, value});
     current_cfg->current_bb->add_IRInstr(IRInstr::ldconst_double, DOUBLE, {dest, label});
     return dest;
 }
 
-// Émet une conversion si le type de val ne correspond pas à targetType.
-// Retourne le varName du résultat.
 string IRGenVisitor::emitConversion(ExprValue& val, Type targetType) {
     if (val.type == targetType) {
         return materialize(val);
     }
     string srcVar = materialize(val);
     if (val.type == INT && targetType == DOUBLE) {
-        // int → double
         string dest = current_cfg->create_new_tempvar(DOUBLE);
         current_cfg->current_bb->add_IRInstr(IRInstr::int_to_double, DOUBLE, {dest, srcVar});
         val.type = DOUBLE;
@@ -63,7 +62,6 @@ string IRGenVisitor::emitConversion(ExprValue& val, Type targetType) {
         val.varName = dest;
         return dest;
     } else if (val.type == DOUBLE && targetType == INT) {
-        // double → int (truncation)
         string dest = current_cfg->create_new_tempvar(INT);
         current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {dest, srcVar});
         val.type = INT;
@@ -74,7 +72,6 @@ string IRGenVisitor::emitConversion(ExprValue& val, Type targetType) {
     return srcVar;
 }
 
-// Matérialise un ExprValue constant en variable temporaire si besoin
 string IRGenVisitor::materialize(ExprValue& val) {
     if (val.isConstant) {
         if (val.type == DOUBLE) {
@@ -101,6 +98,9 @@ antlrcpp::Any IRGenVisitor::visitFunction_def(ifccParser::Function_defContext *c
     Type retType = parseType(ctx->type());
 
     constMap.clear();
+    scopeStack.clear();
+    nextVarIndex = 0;
+    pushScope();
 
     current_cfg = new CFG(nullptr, funcName);
     current_cfg->returnType = retType;
@@ -113,7 +113,12 @@ antlrcpp::Any IRGenVisitor::visitFunction_def(ifccParser::Function_defContext *c
     BasicBlock* entry = new BasicBlock(current_cfg, ".LBB_" + funcName + "_0");
     current_cfg->add_bb(entry);
 
-    current_cfg->add_to_symbol_table("!retval", retType);
+    if (retType != VOID) {
+        current_cfg->add_to_symbol_table("!retval", retType);
+    } else {
+        // Pour void, on crée quand même un retval INT pour simplifier (valeur ignorée)
+        current_cfg->add_to_symbol_table("!retval", INT);
+    }
 
     // Charger les paramètres depuis l'ABI
     if (ctx->parameters()) {
@@ -124,7 +129,7 @@ antlrcpp::Any IRGenVisitor::visitFunction_def(ifccParser::Function_defContext *c
         auto varNodes = ctx->parameters()->VAR();
         
         for (size_t i = 0; i < varNodes.size(); i++) {
-            string paramName = varNodes[i]->getText();
+            string paramName = declareScopedVariable(varNodes[i]->getText());
             Type paramType = parseType(typeNodes[i]);
             current_cfg->add_to_symbol_table(paramName, paramType);
             
@@ -155,21 +160,22 @@ antlrcpp::Any IRGenVisitor::visitFunction_def(ifccParser::Function_defContext *c
     }
 
     current_cfg->add_bb(exit_bb);
+    popScope();
     return 0;
 }
 
 antlrcpp::Any IRGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx) {
-    string varName = ctx->VAR()->getText();
+    string originalName = ctx->VAR()->getText();
     Type declType = parseType(ctx->type());
 
+    string varName = declareScopedVariable(originalName);
     current_cfg->add_to_symbol_table(varName, declType);
 
     ExprValue exprResult = this->visit(ctx->expr()).as<ExprValue>();
 
-    // Conversion implicite si nécessaire (ex: int x = 3.14 → truncation, double y = 5 → promotion)
+    // Conversion implicite si nécessaire
     if (exprResult.type != declType) {
         if (exprResult.isConstant) {
-            // Conversion constante à la compilation
             if (declType == DOUBLE && exprResult.type == INT) {
                 exprResult.dvalue = (double)exprResult.value;
                 exprResult.type = DOUBLE;
@@ -203,16 +209,16 @@ antlrcpp::Any IRGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx) {
 }
 
 antlrcpp::Any IRGenVisitor::visitDeclArray(ifccParser::DeclArrayContext *ctx) {
-    string varName = ctx->VAR()->getText();
+    string originalName = ctx->VAR()->getText();
     Type elemType = parseType(ctx->type());
     int arraySize = stoi(ctx->CONST()->getText());
 
+    string varName = declareScopedVariable(originalName);
     current_cfg->add_array_to_symbol_table(varName, elemType, arraySize);
-    // Pas d'initialisation pour les tableaux (ils ne sont pas initialisés)
     return 0;
 }
 
-antlrcpp::Any IRGenVisitor::visitAffectation(ifccParser::AffectationContext *ctx) {
+antlrcpp::Any IRGenVisitor::visitAssignExpr(ifccParser::AssignExprContext *ctx) {
     // 1. Évaluer la rvalue (expression à droite du '=')
     ExprValue exprResult = this->visit(ctx->expr()).as<ExprValue>();
 
@@ -235,7 +241,7 @@ antlrcpp::Any IRGenVisitor::visitAffectation(ifccParser::AffectationContext *ctx
         }
     }
 
-    // 4. Sauvegarder l'info de constante avant matérialisation (pour constMap)
+    // 4. Sauvegarder l'info de constante avant matérialisation
     bool wasConstant = exprResult.isConstant;
     int constValue = exprResult.value;
 
@@ -249,28 +255,31 @@ antlrcpp::Any IRGenVisitor::visitAffectation(ifccParser::AffectationContext *ctx
         current_cfg->current_bb->add_IRInstr(IRInstr::wmem, INT, {lv.addrVar, valVar});
     }
 
-    // 7. Propagation de constantes (invalidation pour les tableaux)
+    // 7. Propagation de constantes
     if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(ctx->lvalue())) {
-        string varName = lvVar->VAR()->getText();
+        string varName = getScopedName(lvVar->VAR()->getText());
         if (wasConstant && varType == INT) {
             constMap[varName] = constValue;
         } else {
             constMap.erase(varName);
         }
     }
-    // Pour les lvalue tableau, on ne propage pas de constante
 
-    return 0;
+    // 8. Retourner la valeur assignée (pour chaînage a = b = 1)
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = valVar;
+    result.type = varType;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
 }
 
 antlrcpp::Any IRGenVisitor::visitLvalueVar(ifccParser::LvalueVarContext *ctx) {
-    // Pour une lvalue simple (variable), calculer son adresse via lea
-    string varName = ctx->VAR()->getText();
+    string varName = getScopedName(ctx->VAR()->getText());
     Type varType = current_cfg->get_var_type(varName);
 
-    // Créer un temporaire pour stocker l'adresse (8 octets = pointeur)
     string addrTemp = current_cfg->create_new_tempvar(ADDR);
-    // lea : addrTemp = &varName
     current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {addrTemp, varName});
 
     LvalueResult lv;
@@ -280,54 +289,21 @@ antlrcpp::Any IRGenVisitor::visitLvalueVar(ifccParser::LvalueVarContext *ctx) {
 }
 
 antlrcpp::Any IRGenVisitor::visitLvalueArray(ifccParser::LvalueArrayContext *ctx) {
-    // a[i] en tant que lvalue : calculer l'adresse de l'élément a[i]
-    // a[i] = Mem[&a_base + i * sizeof(elemType)]
-    // Attention : notre convention SymbolIndex stocke le bord supérieur de l'allocation.
-    // Pour un tableau de N éléments, l'élément 0 est à l'adresse la plus haute (= &a - 0*elemSize),
-    // mais en fait la mémoire croît vers le bas sur la pile.
-    // SymbolIndex[a] = bord supérieur. L'élément a[0] est à -(SymbolIndex[a])(%rbp),
-    // l'élément a[1] est à -(SymbolIndex[a] - 1*elemSize)(%rbp), etc.
-    // Donc a[i] est à %rbp - SymbolIndex[a] + i * elemSize
-    // En adresse absolue : leaq -(SymbolIndex[a])(%rbp), %rax donne l'adresse de a[0]
-    // Puis on ajoute i * elemSize pour obtenir a[i]
-
-    string varName = ctx->VAR()->getText();
+    string varName = getScopedName(ctx->VAR()->getText());
     Type elemType = current_cfg->get_array_element_type(varName);
     int elemSize = typeSize(elemType);
 
-    // Évaluer l'expression d'index
     ExprValue indexExpr = this->visit(ctx->expr()).as<ExprValue>();
 
-    // Calculer l'adresse de base du tableau (adresse de l'élément 0)
     string baseAddr = current_cfg->create_new_tempvar(ADDR);
     current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {baseAddr, varName});
 
-    // Calculer l'offset : index * elemSize
-    // D'abord matérialiser l'index
     string indexVar = materialize(indexExpr);
 
-    // Convertir index (int) en offset en octets : index * elemSize
-    // On a besoin d'un temporaire ADDR (8 octets) pour l'arithmétique d'adresse
-    // Multiplier l'index par elemSize, puis sign-extend en 64 bits
-    string scaledIndex = current_cfg->create_new_tempvar(ADDR);
-    // Utiliser ldconst pour charger elemSize, mul pour multiplier, puis stocker comme ADDR
     string elemSizeVar = loadConst(elemSize);
     string offsetInt = current_cfg->create_new_tempvar(INT);
     current_cfg->current_bb->add_IRInstr(IRInstr::mul, INT, {offsetInt, indexVar, elemSizeVar});
 
-    // Convertir l'offset int (32 bits) en adresse 64 bits via un int_to_double... non.
-    // On va stocker l'offset dans un ADDR directement via une instruction spéciale.
-    // En fait, utilisons add_addr qui fait dest = addr + offset (64 bits).
-    // Mais l'offset est un int 32 bits. On doit le sign-extend.
-    // Solution plus simple : utiliser lea pour faire l'arithmétique côté assembleur.
-    // Créons plutôt un schéma simple avec les instructions existantes.
-
-    // On va mettre l'offset (en int) dans un temp ADDR via une conversion manuelle
-    // Pour simplifier, on va émettre directement l'assembleur via des instructions existantes.
-    // Approche : utiliser add_addr avec l'offset en int, et le gen_asm fera movslq pour sign-extend.
-
-    // Changeons l'approche : add_addr prend [dest, base_addr, offset_int]
-    // Le gen_asm fait : movq base, %rax; movsxdl offset, %rcx; addq %rcx, %rax; movq %rax, dest
     string resultAddr = current_cfg->create_new_tempvar(ADDR);
     current_cfg->current_bb->add_IRInstr(IRInstr::add_addr, ADDR, {resultAddr, baseAddr, offsetInt});
 
@@ -341,7 +317,6 @@ antlrcpp::Any IRGenVisitor::visitReturn_stmt(ifccParser::Return_stmtContext *ctx
     ExprValue exprResult = this->visit(ctx->expr()).as<ExprValue>();
     Type retType = current_cfg->returnType;
 
-    // Conversion implicite vers le type de retour
     if (exprResult.type != retType) {
         if (exprResult.isConstant) {
             if (retType == DOUBLE && exprResult.type == INT) {
@@ -399,8 +374,36 @@ antlrcpp::Any IRGenVisitor::visitConstDoubleExpr(ifccParser::ConstDoubleExprCont
     return val;
 }
 
+antlrcpp::Any IRGenVisitor::visitCharExpr(ifccParser::CharExprContext *ctx) {
+    string text = ctx->CHAR_CONST()->getText();
+    // text is like 'a' or '\n' — strip the surrounding quotes
+    string inner = text.substr(1, text.size() - 2);
+
+    int charValue = 0;
+    if (inner.size() == 1) {
+        charValue = (unsigned char)inner[0];
+    } else if (inner.size() == 2 && inner[0] == '\\') {
+        switch (inner[1]) {
+            case 'n': charValue = '\n'; break;
+            case 'r': charValue = '\r'; break;
+            case 't': charValue = '\t'; break;
+            case '0': charValue = '\0'; break;
+            case '\\': charValue = '\\'; break;
+            case '\'': charValue = '\''; break;
+            default: charValue = (unsigned char)inner[1]; break;
+        }
+    }
+
+    ExprValue val;
+    val.isConstant = true;
+    val.value = charValue;
+    val.dvalue = 0.0;
+    val.type = INT;
+    return val;
+}
+
 antlrcpp::Any IRGenVisitor::visitVarExpr(ifccParser::VarExprContext *ctx) {
-    string varName = ctx->VAR()->getText();
+    string varName = getScopedName(ctx->VAR()->getText());
     Type varType = current_cfg->get_var_type(varName);
 
     // Propagation des constantes (seulement pour les int)
@@ -426,29 +429,23 @@ antlrcpp::Any IRGenVisitor::visitVarExpr(ifccParser::VarExprContext *ctx) {
 }
 
 antlrcpp::Any IRGenVisitor::visitArrayAccessExpr(ifccParser::ArrayAccessExprContext *ctx) {
-    // a[i] comme rvalue : calculer l'adresse et lire la valeur
-    string varName = ctx->VAR()->getText();
+    string varName = getScopedName(ctx->VAR()->getText());
     Type elemType = current_cfg->get_array_element_type(varName);
     int elemSize = typeSize(elemType);
 
-    // Évaluer l'expression d'index
     ExprValue indexExpr = this->visit(ctx->expr()).as<ExprValue>();
 
-    // Adresse de base du tableau
     string baseAddr = current_cfg->create_new_tempvar(ADDR);
     current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {baseAddr, varName});
 
-    // Calculer l'offset : index * elemSize
     string indexVar = materialize(indexExpr);
     string elemSizeVar = loadConst(elemSize);
     string offsetInt = current_cfg->create_new_tempvar(INT);
     current_cfg->current_bb->add_IRInstr(IRInstr::mul, INT, {offsetInt, indexVar, elemSizeVar});
 
-    // Calculer l'adresse de l'élément
     string elemAddr = current_cfg->create_new_tempvar(ADDR);
     current_cfg->current_bb->add_IRInstr(IRInstr::add_addr, ADDR, {elemAddr, baseAddr, offsetInt});
 
-    // Lire la valeur à cette adresse
     string dest = current_cfg->create_new_tempvar(elemType);
     if (elemType == DOUBLE) {
         current_cfg->current_bb->add_IRInstr(IRInstr::rmem_double, DOUBLE, {dest, elemAddr});
@@ -465,19 +462,22 @@ antlrcpp::Any IRGenVisitor::visitArrayAccessExpr(ifccParser::ArrayAccessExprCont
     return result;
 }
 
-antlrcpp::Any IRGenVisitor::visitMulDivExpr(ifccParser::MulDivExprContext *ctx) {
+antlrcpp::Any IRGenVisitor::visitMulDivModExpr(ifccParser::MulDivModExprContext *ctx) {
     ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
     ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
     string op = ctx->children[1]->getText();
 
-    Type resultType = promoteType(left.type, right.type);
+    Type resultType = (op == "%") ? INT : promoteType(left.type, right.type);
 
     // Constant folding
     if (left.isConstant && right.isConstant) {
         ExprValue result;
         result.isConstant = true;
         result.type = resultType;
-        if (resultType == DOUBLE) {
+        if (op == "%") {
+            result.value = (right.value != 0) ? left.value % right.value : 0;
+            result.dvalue = 0.0;
+        } else if (resultType == DOUBLE) {
             double lv = (left.type == INT) ? (double)left.value : left.dvalue;
             double rv = (right.type == INT) ? (double)right.value : right.dvalue;
             result.dvalue = (op == "*") ? lv * rv : lv / rv;
@@ -490,7 +490,7 @@ antlrcpp::Any IRGenVisitor::visitMulDivExpr(ifccParser::MulDivExprContext *ctx) 
         return result;
     }
 
-    // Élimination des éléments neutres (seulement pour int * et /)
+    // Élimination des éléments neutres
     if (op == "*") {
         if (resultType == INT) {
             if (right.isConstant && right.value == 1) return left;
@@ -509,7 +509,9 @@ antlrcpp::Any IRGenVisitor::visitMulDivExpr(ifccParser::MulDivExprContext *ctx) 
 
     string dest = current_cfg->create_new_tempvar(resultType);
 
-    if (resultType == DOUBLE) {
+    if (op == "%") {
+        current_cfg->current_bb->add_IRInstr(IRInstr::mod_int, INT, {dest, leftVar, rightVar});
+    } else if (resultType == DOUBLE) {
         if (op == "*")
             current_cfg->current_bb->add_IRInstr(IRInstr::mul_double, DOUBLE, {dest, leftVar, rightVar});
         else
@@ -554,7 +556,7 @@ antlrcpp::Any IRGenVisitor::visitAddSubExpr(ifccParser::AddSubExprContext *ctx) 
         return result;
     }
 
-    // Élimination des éléments neutres (seulement pour int)
+    // Élimination des éléments neutres
     if (resultType == INT) {
         if (op == "+") {
             if (right.isConstant && right.value == 0) return left;
@@ -564,7 +566,6 @@ antlrcpp::Any IRGenVisitor::visitAddSubExpr(ifccParser::AddSubExprContext *ctx) 
         }
     }
 
-    // Conversion implicite si les types diffèrent
     string leftVar = emitConversion(left, resultType);
     string rightVar = emitConversion(right, resultType);
 
@@ -609,7 +610,6 @@ antlrcpp::Any IRGenVisitor::visitUnaryMinusExpr(ifccParser::UnaryMinusExprContex
     }
 
     if (src.type == DOUBLE) {
-        // -x double : on fait 0.0 - x
         string zero = loadConstDouble(0.0);
         string srcVar = src.varName;
         string dest = current_cfg->create_new_tempvar(DOUBLE);
@@ -636,6 +636,128 @@ antlrcpp::Any IRGenVisitor::visitUnaryMinusExpr(ifccParser::UnaryMinusExprContex
     }
 }
 
+antlrcpp::Any IRGenVisitor::visitLogicalNotExpr(ifccParser::LogicalNotExprContext *ctx) {
+    ExprValue src = this->visit(ctx->expr()).as<ExprValue>();
+
+    // Constant folding
+    if (src.isConstant) {
+        ExprValue result;
+        result.isConstant = true;
+        result.type = INT;
+        result.dvalue = 0.0;
+        if (src.type == DOUBLE) {
+            result.value = (src.dvalue == 0.0) ? 1 : 0;
+        } else {
+            result.value = (src.value == 0) ? 1 : 0;
+        }
+        return result;
+    }
+
+    // Si c'est un double, convertir en int d'abord
+    if (src.type == DOUBLE) {
+        string intVar = current_cfg->create_new_tempvar(INT);
+        current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {intVar, src.varName});
+        src.varName = intVar;
+        src.type = INT;
+    }
+
+    string dest = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::logical_not, INT, {dest, src.varName});
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = dest;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitBitAndExpr(ifccParser::BitAndExprContext *ctx) {
+    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
+    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+
+    // Constant folding (int only)
+    if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
+        ExprValue result;
+        result.isConstant = true;
+        result.type = INT;
+        result.value = left.value & right.value;
+        result.dvalue = 0.0;
+        return result;
+    }
+
+    string leftVar = materialize(left);
+    string rightVar = materialize(right);
+
+    string dest = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::bit_and, INT, {dest, leftVar, rightVar});
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = dest;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitBitXorExpr(ifccParser::BitXorExprContext *ctx) {
+    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
+    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+
+    if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
+        ExprValue result;
+        result.isConstant = true;
+        result.type = INT;
+        result.value = left.value ^ right.value;
+        result.dvalue = 0.0;
+        return result;
+    }
+
+    string leftVar = materialize(left);
+    string rightVar = materialize(right);
+
+    string dest = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::bit_xor, INT, {dest, leftVar, rightVar});
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = dest;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitBitOrExpr(ifccParser::BitOrExprContext *ctx) {
+    ExprValue left = this->visit(ctx->expr(0)).as<ExprValue>();
+    ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
+
+    if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
+        ExprValue result;
+        result.isConstant = true;
+        result.type = INT;
+        result.value = left.value | right.value;
+        result.dvalue = 0.0;
+        return result;
+    }
+
+    string leftVar = materialize(left);
+    string rightVar = materialize(right);
+
+    string dest = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::bit_or, INT, {dest, leftVar, rightVar});
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = dest;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
 antlrcpp::Any IRGenVisitor::visitParenExpr(ifccParser::ParenExprContext *ctx) {
     return this->visit(ctx->expr());
 }
@@ -659,16 +781,18 @@ antlrcpp::Any IRGenVisitor::visitCallExpr(ifccParser::CallExprContext *ctx) {
     ExprValue result;
     result.isConstant = false;
     result.varName = dest;
-    result.type = INT;  // Les appels de fonction retournent INT par défaut
+    result.type = INT;
     result.value = 0;
     result.dvalue = 0.0;
     return result;
 }
 
 antlrcpp::Any IRGenVisitor::visitBlock(ifccParser::BlockContext *ctx) {
+    pushScope();
     for (auto stmt : ctx->statement()) {
         this->visit(stmt);
     }
+    popScope();
     return 0;
 }
 
@@ -682,7 +806,6 @@ antlrcpp::Any IRGenVisitor::visitIfStmt(ifccParser::IfStmtContext *ctx) {
     ExprValue cond = this->visit(ctx->expr()).as<ExprValue>();
     string condVar = cond.isConstant ? loadConst(cond.value) : cond.varName;
     
-    // Si la condition est un double, il faut la convertir en int pour le test
     if (cond.type == DOUBLE && !cond.isConstant) {
         string intVar = current_cfg->create_new_tempvar(INT);
         current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {intVar, condVar});
@@ -740,7 +863,6 @@ antlrcpp::Any IRGenVisitor::visitEqExpr(ifccParser::EqExprContext *ctx) {
     ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
     string op = ctx->children[1]->getText();
 
-    // Constant folding
     if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
         ExprValue result;
         result.isConstant = true;
@@ -751,16 +873,11 @@ antlrcpp::Any IRGenVisitor::visitEqExpr(ifccParser::EqExprContext *ctx) {
         return result;
     }
 
-    // Pour les comparaisons, on convertit au type commun d'abord
     Type commonType = promoteType(left.type, right.type);
     string leftVar = emitConversion(left, commonType);
     string rightVar = emitConversion(right, commonType);
 
-    // Note: les comparaisons double nécessiteraient ucomisd + sete/setne
-    // Pour simplifier, on garde les cmp int (les doubles étant convertis en int pour la comparaison)
-    // TODO: ajouter des instructions cmp_eq_double si nécessaire
     if (commonType == DOUBLE) {
-        // Convertir les deux en int pour la comparaison (approximation simple)
         string leftInt = current_cfg->create_new_tempvar(INT);
         current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {leftInt, leftVar});
         string rightInt = current_cfg->create_new_tempvar(INT);
@@ -779,7 +896,7 @@ antlrcpp::Any IRGenVisitor::visitEqExpr(ifccParser::EqExprContext *ctx) {
     ExprValue result;
     result.isConstant = false;
     result.varName = dest;
-    result.type = INT;  // Le résultat d'une comparaison est toujours int
+    result.type = INT;
     result.value = 0;
     result.dvalue = 0.0;
     return result;
@@ -790,7 +907,6 @@ antlrcpp::Any IRGenVisitor::visitRelExpr(ifccParser::RelExprContext *ctx) {
     ExprValue right = this->visit(ctx->expr(1)).as<ExprValue>();
     string op = ctx->children[1]->getText();
 
-    // Constant folding
     if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
         ExprValue result;
         result.isConstant = true;
