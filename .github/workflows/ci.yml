@@ -16,19 +16,28 @@ jobs:
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y default-jdk default-jre g++ make python3
-        
-        # Le runtime C++ pour Ubuntu 22.04 est ANTLR 4.9.3
-        sudo apt-get install -y libantlr4-runtime-dev
-        
-        # On télécharge directement le jar "complete" pour éviter les bugs de classpath du package ubuntu
-        wget https://www.antlr.org/download/antlr-4.9.3-complete.jar -O /tmp/antlr4.jar
+        sudo apt-get install -y default-jdk default-jre g++ make python3 cmake pkg-config uuid-dev
 
-    - name: Configure ANTLR paths for Ubuntu APT
+    - name: Setup ANTLR 4.13.2 (Java Tool & C++ Runtime)
+      run: |
+        # On télécharge l'outil ANTLR 4.13.2
+        wget https://www.antlr.org/download/antlr-4.13.2-complete.jar -O /tmp/antlr4.jar
+        
+        # On compile le runtime C++ version 4.13.2 pour correspondre exactement à ta version locale !
+        wget https://www.antlr.org/download/antlr4-cpp-runtime-4.13.2-source.zip
+        unzip -q antlr4-cpp-runtime-4.13.2-source.zip -d antlr4-cpp-runtime
+        mkdir -p antlr4-cpp-runtime/build
+        cd antlr4-cpp-runtime/build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j4
+        sudo make install
+        sudo ldconfig
+
+    - name: Configure ANTLR paths
       run: |
         echo "ANTLRJAR=/tmp/antlr4.jar" > compiler/config.mk
-        echo "ANTLRINC=/usr/include/antlr4-runtime" >> compiler/config.mk
-        echo "ANTLRLIB=-lantlr4-runtime" >> compiler/config.mk
+        echo "ANTLRINC=/usr/local/include/antlr4-runtime" >> compiler/config.mk
+        echo "ANTLRLIB=/usr/local/lib/libantlr4-runtime.a" >> compiler/config.mk
 
     - name: Build Compiler
       working-directory: ./compiler
