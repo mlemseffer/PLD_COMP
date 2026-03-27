@@ -415,6 +415,26 @@ return a[2];  /* Return 42 */
 
 ---
 
+### 4.21 — Compatibilité ANTLR C++17 (std::any)
+
+**Objectif** : Résoudre les problèmes de compilation (`error: ‘class std::any’ has no member named ‘as’`) causés par le passage d'ANTLR 4.9 à ANTLR 4.10+.
+
+**Contexte** : 
+Historiquement, la classe de retour de l'AST dans le runtime C++ d'ANTLR4 était une classe maison nommée `antlrcpp::Any`, qui se lisait avec la méthode `.as<T>()`. Depuis la version 4.10 (et avec la norme C++17), ANTLR a remplacé cette classe propriétaire par le standard `std::any`, qui force l'utilisation de `std::any_cast<T>(...)`. 
+Ce changement brutal d'API créait une asymétrie entre les environnements locaux (ayant potentiellement d'anciennes versions d'ANTLR4) et les serveurs CI/CD récents (Ubuntu 22.04), empêchant le pipeline GitHub Actions de compiler le compilateur.
+
+**Implémentation** :
+- **Wrapper générique hybride** : Ajout d'une fonction template `castAny<T>` en haut de `IRGenVisitor.cpp` exploitant le `if constexpr` du C++17.
+- Si le compilateur C++ détecte que `AnyType` est un alias transparent de `std::any` (ANTLR 4.10+), la fonction appelle `std::any_cast<T>(a)`.
+- Si c'est l'ancienne classe personnalisée locale, la fonction appelle `a.template as<T>()`.
+- Remplacement de tous les appels problématiques (ex: `this->visit().as<ExprValue>()`) par le nouveau wrapper (`castAny<ExprValue>(this->visit())`).
+
+Cette modification *zéro overhead* permet au compilateur de compiler silencieusement sous n'importe quelle version du run-time ANTLR C++ distribuée sur les 5 dernières années, tout en garantissant le fonctionnement sans échec de la CI GitHub Actions.
+
+**Fichiers modifiés** : `IRGenVisitor.cpp`
+
+---
+
 ## Grammaire complète
 
 ```antlr
