@@ -16,11 +16,17 @@ jobs:
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y default-jdk default-jre g++ make python3 antlr4 libantlr4-runtime-dev
+        sudo apt-get install -y default-jdk default-jre g++ make python3
+        
+        # Le runtime C++ pour Ubuntu 22.04 est ANTLR 4.9.3
+        sudo apt-get install -y libantlr4-runtime-dev
+        
+        # On télécharge directement le jar "complete" pour éviter les bugs de classpath du package ubuntu
+        wget https://www.antlr.org/download/antlr-4.9.3-complete.jar -O /tmp/antlr4.jar
 
     - name: Configure ANTLR paths for Ubuntu APT
       run: |
-        echo "ANTLRJAR=/usr/share/java/antlr4.jar" > compiler/config.mk
+        echo "ANTLRJAR=/tmp/antlr4.jar" > compiler/config.mk
         echo "ANTLRINC=/usr/include/antlr4-runtime" >> compiler/config.mk
         echo "ANTLRLIB=-lantlr4-runtime" >> compiler/config.mk
 
