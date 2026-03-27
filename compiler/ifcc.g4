@@ -6,7 +6,7 @@ function_def : type VAR '(' parameters? ')' '{' statement* '}' ;
 
 parameters : type VAR (',' type VAR)* ;
 
-type : 'int' | 'double' | 'void' ;
+type : 'int' | 'double' | 'void' | 'char' ;
 
 statement : declaration ';' | expr ';' | return_stmt | block | ifStmt | whileStmt ;
 
@@ -18,6 +18,7 @@ whileStmt : 'while' '(' expr ')' statement ;
 
 declaration : type VAR '=' expr              # declVar
            | type VAR '[' CONST ']'           # declArray
+           | type VAR                         # declVarUninit
            ;
 
 lvalue : VAR '[' expr ']'    # lvalueArray
@@ -52,5 +53,6 @@ CONST_DOUBLE : [0-9]+ '.' [0-9]* | '.' [0-9]+ ;
 CONST : [0-9]+ ;
 CHAR_CONST : '\'' ( '\\' [nrt0\\'] | ~['\\\r\n] ) '\'' ;
 COMMENT : '/*' .*? '*/' -> skip ;
+LINE_COMMENT : '//' ~[\r\n]* -> skip ;
 DIRECTIVE : '#' .*? '\n' -> skip ;
 WS    : [ \t\r\n] -> channel(HIDDEN);

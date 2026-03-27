@@ -46,6 +46,12 @@ antlrcpp::Any CodeGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx)
     return 0;
 }
 
+antlrcpp::Any CodeGenVisitor::visitDeclVarUninit(ifccParser::DeclVarUninitContext *ctx)
+{
+    // No assigned value, just reserve the space (already done by symbol table size calculation).
+    return 0;
+}
+
 antlrcpp::Any CodeGenVisitor::visitDeclArray(ifccParser::DeclArrayContext *ctx)
 {
     return 0;

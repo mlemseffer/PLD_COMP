@@ -171,6 +171,30 @@ antlrcpp::Any SymbolTableVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx) 
     return 0;
 }
 
+antlrcpp::Any SymbolTableVisitor::visitDeclVarUninit(ifccParser::DeclVarUninitContext *ctx) {
+    std::string varName = ctx->VAR()->getText();
+    Type declType = parseType(ctx->type());
+
+    if (declType == VOID) {
+        std::cerr << "error: variable '" << varName << "' declared void" << std::endl;
+        hasError = true;
+        return 0;
+    }
+
+    int size = typeSize(declType);
+    if (!scopeStack.empty() && scopeStack.back().find(varName) != scopeStack.back().end()) {
+        std::cerr << "error: variable '" << varName << "' already declared in this scope" << std::endl;
+        hasError = true;
+        return 0;
+    }
+    if (size == 8 && (nextFreeIndex % 8 != 0)) {
+        nextFreeIndex += (8 - (nextFreeIndex % 8));
+    }
+    declareVariable(varName, nextFreeIndex);
+    nextFreeIndex += size;
+    return 0;
+}
+
 antlrcpp::Any SymbolTableVisitor::visitDeclArray(ifccParser::DeclArrayContext *ctx) {
     std::string varName = ctx->VAR()->getText();
     Type declType = parseType(ctx->type());

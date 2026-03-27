@@ -16,6 +16,9 @@ set<string> IRGenVisitor::collectAssignedVars(antlr4::tree::ParseTree* tree) {
         // It's a new variable anyway, so it shouldn't affect outer constants.
         result.insert(declCtx->VAR()->getText());
     }
+    if (auto* declUninitCtx = dynamic_cast<ifccParser::DeclVarUninitContext*>(tree)) {
+        result.insert(declUninitCtx->VAR()->getText());
+    }
     if (auto* declArrCtx = dynamic_cast<ifccParser::DeclArrayContext*>(tree)) {
         result.insert(declArrCtx->VAR()->getText());
     }
@@ -32,6 +35,7 @@ Type IRGenVisitor::parseType(ifccParser::TypeContext* ctx) {
     string text = ctx->getText();
     if (text == "double") return DOUBLE;
     if (text == "void") return VOID;
+    if (text == "char") return INT; // char traité comme int
     return INT;
 }
 
@@ -204,6 +208,16 @@ antlrcpp::Any IRGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx) {
             constMap.erase(varName);
         }
     }
+
+    return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitDeclVarUninit(ifccParser::DeclVarUninitContext *ctx) {
+    string originalName = ctx->VAR()->getText();
+    Type declType = parseType(ctx->type());
+
+    string varName = declareScopedVariable(originalName);
+    current_cfg->add_to_symbol_table(varName, declType);
 
     return 0;
 }

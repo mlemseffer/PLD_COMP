@@ -12,6 +12,7 @@ public:
     virtual antlrcpp::Any visitProg(ifccParser::ProgContext *ctx) override;
     virtual antlrcpp::Any visitFunction_def(ifccParser::Function_defContext *ctx) override;
     virtual antlrcpp::Any visitDeclVar(ifccParser::DeclVarContext *ctx) override;
+    virtual antlrcpp::Any visitDeclVarUninit(ifccParser::DeclVarUninitContext *ctx) override;
     virtual antlrcpp::Any visitDeclArray(ifccParser::DeclArrayContext *ctx) override;
     virtual antlrcpp::Any visitAssignExpr(ifccParser::AssignExprContext *ctx) override;
     virtual antlrcpp::Any visitVarExpr(ifccParser::VarExprContext *ctx) override;
@@ -46,6 +47,7 @@ private:
         std::string text = ctx->getText();
         if (text == "double") return DOUBLE;
         if (text == "void") return VOID;
+        if (text == "char") return INT; // char traité comme int (4 octets) pour simplifier
         return INT;
     }
 };
