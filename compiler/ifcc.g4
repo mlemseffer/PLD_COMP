@@ -8,13 +8,23 @@ parameters : type VAR (',' type VAR)* ;
 
 type : 'int' | 'double' | 'void' | 'char' ;
 
-statement : declaration ';' | expr ';' | return_stmt | block | ifStmt | whileStmt ;
+statement : declaration ';' | expr ';' | return_stmt | block | ifStmt | whileStmt | switchStmt | breakStmt | continueStmt ;
 
 block : '{' statement* '}' ;
 
 ifStmt : 'if' '(' expr ')' statement ('else' statement)? ;
 
 whileStmt : 'while' '(' expr ')' statement ;
+
+switchStmt : 'switch' '(' expr ')' '{' switchCase* '}' ;
+
+switchCase : 'case' CONST ':' statement*    # caseClause
+           | 'default' ':' statement*       # defaultClause
+           ;
+
+breakStmt : 'break' ';' ;
+
+continueStmt : 'continue' ';' ;
 
 declaration : type VAR '=' expr              # declVar
            | type VAR '[' CONST ']'           # declArray
@@ -34,6 +44,8 @@ expr : '-' expr                              # unaryMinusExpr
      | expr '&' expr                         # bitAndExpr
      | expr '^' expr                         # bitXorExpr
      | expr '|' expr                         # bitOrExpr
+     | expr '&&' expr                        # logicalAndExpr
+     | expr '||' expr                        # logicalOrExpr
      | <assoc=right> lvalue '=' expr         # assignExpr
      | VAR '(' (expr (',' expr)*)? ')'       # callExpr
      | VAR '[' expr ']'                      # arrayAccessExpr

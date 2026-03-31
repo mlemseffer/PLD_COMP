@@ -435,6 +435,89 @@ Cette modification *zéro overhead* permet au compilateur de compiler silencieus
 
 ---
 
+### 4.22 — Opérateurs logiques paresseux `&&` et `||`
+
+**Objectif** : Implémenter les opérateurs logiques avec **évaluation court-circuit** (lazy evaluation) : le second opérande n'est évalué que si le résultat n'est pas déjà déterminé par le premier.
+
+**Principe** :
+- `a && b` : si `a == 0`, résultat = 0 sans évaluer `b`. Sinon, résultat = `(b != 0)`.
+- `a || b` : si `a != 0`, résultat = 1 sans évaluer `b`. Sinon, résultat = `(b != 0)`.
+
+**Implémentation** :
+- **Grammaire** (`ifcc.g4`) : ajout de `logicalAndExpr` et `logicalOrExpr` dans `expr`, entre `bitOrExpr` et `assignExpr`, respectant la précédence C (`&&` > `||`).
+- **Génération IR** (`IRGenVisitor.cpp`) — `visitLogicalAndExpr` / `visitLogicalOrExpr` :
+  1. Allouer `result` (variable de pile, persistante entre blocs).
+  2. Initialiser `result = 0` (`&&`) ou `result = 1` (`||`) dans le bloc courant.
+  3. Évaluer l'opérande gauche → `leftVar`.
+  4. Configurer le branchement court-circuit :
+     - `&&` : `exit_true → bb_eval_right`, `exit_false → bb_end`
+     - `||` : `exit_true → bb_end`, `exit_false → bb_eval_right`
+  5. Dans `bb_eval_right` : évaluer l'opérande droit, normaliser via `cmp_neq(right, 0)` → `result`.
+  6. Rejoindre `bb_end`.
+
+**Précédences respectées** :
+| Priorité | Opérateur |
+|----------|-----------|
+| Plus haute | `\|` (bitwise) |
+| | `&&` |
+| Plus basse | `\|\|` |
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+### 4.23 — `break` et `continue`
+
+**Objectif** : Supporter `break` (sortie immédiate d'une boucle ou d'un switch) et `continue` (passage à l'itération suivante d'une boucle).
+
+**Implémentation** :
+- **Grammaire** : `breakStmt : 'break' ';' ;` et `continueStmt : 'continue' ';' ;` ajoutés comme alternatives de `statement`.
+- **Stack de contexte de boucle** (`IRGenVisitor.h`) : un `vector<LoopContext> loopStack` est maintenu. Chaque `LoopContext` contient :
+  - `break_target` : le BasicBlock vers lequel sauter lors d'un `break`.
+  - `continue_target` : le BasicBlock vers lequel sauter lors d'un `continue` (nul pour switch).
+- **Mise à jour de `visitWhileStmt`** : push d'un `LoopContext{bb_end, bb_cond}` avant de visiter le corps, pop après.
+- **`visitBreakStmt`** : `exit_true = loopStack.back().break_target`, puis création d'un bloc mort pour le code éventuellement présent après le `break`.
+- **`visitContinueStmt`** : `exit_true = loopStack.back().continue_target`, même création de bloc mort.
+- **Sémantique d'imbrication** : si un `while` est imbriqué dans un `switch`, son propre `LoopContext` est au sommet de la pile, et un `break` à l'intérieur sort bien du `while`, pas du `switch`.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+### 4.24 — `switch...case`
+
+**Objectif** : Supporter la structure `switch(expr) { case N: ... default: ... }` avec gestion du fall-through et du `break`.
+
+**Implémentation** :
+- **Grammaire** (`ifcc.g4`) :
+  ```antlr
+  switchStmt : 'switch' '(' expr ')' '{' switchCase* '}' ;
+  switchCase : 'case' CONST ':' statement*    # caseClause
+             | 'default' ':' statement*       # defaultClause
+             ;
+  ```
+- **Génération IR** (`IRGenVisitor.cpp`) — `visitSwitchStmt` :
+  1. Évaluer l'expression du switch → `switchVar`.
+  2. Créer un `bb_end` (sortie du switch) et des `bodyBlocks[i]` (un par `case`).
+  3. **Chaîne de comparaisons** : dans le bloc courant et des blocs `bb_check_i` successifs, émettre `cmp_eq(switchVar, case_i_val)` avec branchement conditionnel vers `bodyBlocks[i]` (match) ou `bb_check_{i+1}` (pas de match). Le dernier check pointe vers `bb_default` ou `bb_end`.
+  4. **Corps des cases** : visiter les statements de chaque case. Si le bloc courant n'est pas terminé (pas de `break`/`return`), connecter vers `bodyBlocks[i+1]` (**fall-through**).
+  5. Push d'un `LoopContext{bb_end, continue_outer}` pour que `break` sorte du switch.
+- **Ordre de génération** : checks d'abord, puis bodies dans l'ordre source, ce qui garantit que toutes les comparaisons sont des sauts en avant (forward jumps) dans l'assembleur.
+
+**Exemple testé** :
+```c
+switch (x) {
+    case 1: result = 10; break;
+    case 2: result = result + 20;   // fall-through
+    case 3: result = result + 30; break;
+    default: result = 99;
+}
+```
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
 ## Grammaire complète
 
 ```antlr
@@ -443,34 +526,63 @@ grammar ifcc;
 prog : function_def+ EOF ;
 function_def : type VAR '(' parameters? ')' '{' statement* '}' ;
 parameters : type VAR (',' type VAR)* ;
-type : 'int' | 'double' ;
+type : 'int' | 'double' | 'void' | 'char' ;
 
-statement : declaration ';' | affectation ';' | expr ';'
-          | return_stmt | block | ifStmt | whileStmt ;
+statement : declaration ';' | expr ';' | return_stmt | block
+          | ifStmt | whileStmt | switchStmt | breakStmt | continueStmt ;
 
 block : '{' statement* '}' ;
-ifStmt : 'if' '(' expr ')' statement ('else' statement)? ;
+ifStmt    : 'if' '(' expr ')' statement ('else' statement)? ;
 whileStmt : 'while' '(' expr ')' statement ;
-declaration : type VAR '=' expr ;
-affectation : lvalue '=' expr ;
-lvalue : VAR ;
+switchStmt : 'switch' '(' expr ')' '{' switchCase* '}' ;
+switchCase : 'case' CONST ':' statement*    # caseClause
+           | 'default' ':' statement*       # defaultClause
+           ;
+breakStmt    : 'break' ';' ;
+continueStmt : 'continue' ';' ;
 
-expr : '-' expr                                    # unaryMinusExpr
-     | expr ('*' | '/') expr                       # mulDivExpr
-     | expr ('+' | '-') expr                       # addSubExpr
-     | expr ('<' | '>' | '<=' | '>=') expr         # relExpr
-     | expr ('==' | '!=') expr                     # eqExpr
-     | VAR '(' (expr (',' expr)*)? ')'             # callExpr
-     | '(' expr ')'                                # parenExpr
-     | CONST_DOUBLE                                # constDoubleExpr
-     | CONST                                       # constExpr
-     | VAR                                         # varExpr
+declaration : type VAR '=' expr         # declVar
+            | type VAR '[' CONST ']'    # declArray
+            | type VAR                  # declVarUninit
+            ;
+lvalue : VAR '[' expr ']'  # lvalueArray
+       | VAR               # lvalueVar
+       ;
+
+expr : '-' expr                              # unaryMinusExpr
+     | '!' expr                              # logicalNotExpr
+     | expr ('*' | '/' | '%') expr           # mulDivModExpr
+     | expr ('+' | '-') expr                 # addSubExpr
+     | expr ('<' | '>' | '<=' | '>=') expr   # relExpr
+     | expr ('==' | '!=') expr               # eqExpr
+     | expr '&' expr                         # bitAndExpr
+     | expr '^' expr                         # bitXorExpr
+     | expr '|' expr                         # bitOrExpr
+     | expr '&&' expr                        # logicalAndExpr
+     | expr '||' expr                        # logicalOrExpr
+     | <assoc=right> lvalue '=' expr         # assignExpr
+     | VAR '(' (expr (',' expr)*)? ')'       # callExpr
+     | VAR '[' expr ']'                      # arrayAccessExpr
+     | '(' expr ')'                          # parenExpr
+     | CONST_DOUBLE                          # constDoubleExpr
+     | CONST                                 # constExpr
+     | CHAR_CONST                            # charExpr
+     | VAR                                   # varExpr
      ;
 
 return_stmt : RETURN expr ';' ;
+RETURN : 'return' ;
+VAR : [a-zA-Z_][a-zA-Z_0-9]* ;
 CONST_DOUBLE : [0-9]+ '.' [0-9]* | '.' [0-9]+ ;
 CONST : [0-9]+ ;
+CHAR_CONST : '\'' ( '\\' [nrt0\\'] | ~['\\\r\n] ) '\'' ;
 ```
+
+---
+
+## Nouvelles instructions IR (4.22–4.24)
+
+Aucune nouvelle instruction IR n'a été nécessaire pour ces fonctionnalités — elles sont entièrement construites à partir des instructions existantes (`cmp_eq`, `cmp_neq`, `ldconst`, `copy`) combinées avec la structure de BasicBlocks et de branchements conditionnels.
 
 ---
 
@@ -529,12 +641,17 @@ cd ../testfiles
 
 ## Tests
 
-La suite de tests (`testfiles/run_tests.sh`) couvre **30 cas** :
+La suite de tests (`ifcc-test.py testfiles`) couvre **72 cas** (**72/72** ✅) :
 - Retour de constantes et variables
 - Déclarations et affectations
-- Arithmétique complète (+, -, *, parenthèses, moins unaire, priorités)
-- Appels de fonctions (putchar, fonctions utilisateur)
-- Fonctions multiples avec paramètres
-- Récursion (factorielle récursive)
-- Boucle while (factorielle itérative)
-- Return multiples (classify, abs)
+- Arithmétique complète (+, -, *, /, %, parenthèses, moins unaire, priorités)
+- Appels de fonctions (putchar, getchar, fonctions utilisateur, récursion)
+- Fonctions multiples avec paramètres (jusqu'à 10 arguments)
+- Boucle while (factorielle itérative, Fibonacci, tableaux)
+- Return multiples (if/else imbriqués)
+- Tableaux unidimensionnels (int et double)
+- Flottants (double, conversions implicites)
+- Opérateurs bit-à-bit (`&`, `^`, `|`, `!`)
+- **Opérateurs logiques paresseux `&&` et `||`** (court-circuit réel)
+- **`break` et `continue`** dans les boucles while
+- **`switch...case`** avec fall-through, default, et break

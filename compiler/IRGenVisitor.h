@@ -22,6 +22,11 @@ struct LvalueResult {
     Type type;           // Type de la valeur pointée (INT ou DOUBLE)
 };
 
+struct LoopContext {
+    BasicBlock* break_target;    // where 'break' jumps
+    BasicBlock* continue_target; // where 'continue' jumps (nullptr for switch)
+};
+
 class IRGenVisitor : public ifccBaseVisitor {
 public:
     IRGenVisitor() : current_cfg(nullptr) {}
@@ -56,6 +61,11 @@ public:
     virtual antlrcpp::Any visitRelExpr(ifccParser::RelExprContext *ctx) override;
     virtual antlrcpp::Any visitEqExpr(ifccParser::EqExprContext *ctx) override;
     virtual antlrcpp::Any visitWhileStmt(ifccParser::WhileStmtContext *ctx) override;
+    virtual antlrcpp::Any visitSwitchStmt(ifccParser::SwitchStmtContext *ctx) override;
+    virtual antlrcpp::Any visitBreakStmt(ifccParser::BreakStmtContext *ctx) override;
+    virtual antlrcpp::Any visitContinueStmt(ifccParser::ContinueStmtContext *ctx) override;
+    virtual antlrcpp::Any visitLogicalAndExpr(ifccParser::LogicalAndExprContext *ctx) override;
+    virtual antlrcpp::Any visitLogicalOrExpr(ifccParser::LogicalOrExprContext *ctx) override;
 
 private:
     std::vector<CFG*> cfgs;
@@ -98,4 +108,7 @@ private:
 
     // Compteur global pour les labels de constantes double dans la section .rodata
     int nextDoubleConstIndex = 0;
+
+    // Stack de contexte pour break/continue
+    vector<LoopContext> loopStack;
 };

@@ -171,6 +171,10 @@ antlrcpp::Any IRGenVisitor::visitFunction_def(ifccParser::Function_defContext *c
     }
 
     if (current_cfg->current_bb->exit_true == nullptr && !current_cfg->current_bb->has_return) {
+        // Implicit return 0 for non-void functions (C99 §5.1.2.2.3)
+        if (current_cfg->returnType != VOID) {
+            current_cfg->current_bb->add_IRInstr(IRInstr::ldconst, INT, {"!retval", "0"});
+        }
         current_cfg->current_bb->exit_true = exit_bb;
     }
 
@@ -999,7 +1003,9 @@ antlrcpp::Any IRGenVisitor::visitWhileStmt(ifccParser::WhileStmtContext *ctx) {
     current_cfg->current_bb->exit_false = bb_end;
 
     current_cfg->add_bb(bb_body);
+    loopStack.push_back({bb_end, bb_cond});
     this->visit(ctx->statement());
+    loopStack.pop_back();
     if (!current_cfg->current_bb->has_return) {
         current_cfg->current_bb->exit_true = bb_cond;
         current_cfg->current_bb->exit_false = nullptr;
@@ -1008,4 +1014,244 @@ antlrcpp::Any IRGenVisitor::visitWhileStmt(ifccParser::WhileStmtContext *ctx) {
     current_cfg->add_bb(bb_end);
 
     return 0;
+}
+
+// ===== break =====
+
+antlrcpp::Any IRGenVisitor::visitBreakStmt(ifccParser::BreakStmtContext *ctx) {
+    if (!loopStack.empty()) {
+        current_cfg->current_bb->exit_true = loopStack.back().break_target;
+        current_cfg->current_bb->exit_false = nullptr;
+        current_cfg->current_bb->has_return = true;
+        // Dead block for any unreachable code following the break
+        BasicBlock* dead_bb = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+        current_cfg->add_bb(dead_bb);
+    }
+    return 0;
+}
+
+// ===== continue =====
+
+antlrcpp::Any IRGenVisitor::visitContinueStmt(ifccParser::ContinueStmtContext *ctx) {
+    if (!loopStack.empty() && loopStack.back().continue_target != nullptr) {
+        current_cfg->current_bb->exit_true = loopStack.back().continue_target;
+        current_cfg->current_bb->exit_false = nullptr;
+        current_cfg->current_bb->has_return = true;
+        BasicBlock* dead_bb = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+        current_cfg->add_bb(dead_bb);
+    }
+    return 0;
+}
+
+// ===== switch =====
+
+antlrcpp::Any IRGenVisitor::visitSwitchStmt(ifccParser::SwitchStmtContext *ctx) {
+    ExprValue switchExpr = castAny<ExprValue>(this->visit(ctx->expr()));
+    string switchVar = materialize(switchExpr);
+    if (switchExpr.type == DOUBLE) {
+        string tmp = current_cfg->create_new_tempvar(INT);
+        current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {tmp, switchVar});
+        switchVar = tmp;
+    }
+
+    BasicBlock* bb_end = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    // Collect cases and optional default
+    vector<ifccParser::CaseClauseContext*> cases;
+    ifccParser::DefaultClauseContext* defaultClause = nullptr;
+    for (auto sc : ctx->switchCase()) {
+        if (auto* cc = dynamic_cast<ifccParser::CaseClauseContext*>(sc)) {
+            cases.push_back(cc);
+        } else if (auto* dc = dynamic_cast<ifccParser::DefaultClauseContext*>(sc)) {
+            defaultClause = dc;
+        }
+    }
+
+    BasicBlock* bb_default = defaultClause
+        ? new BasicBlock(current_cfg, current_cfg->new_BB_name())
+        : nullptr;
+    BasicBlock* fallback = bb_default ? bb_default : bb_end;
+
+    // One body block per case
+    vector<BasicBlock*> bodyBlocks;
+    for (size_t i = 0; i < cases.size(); i++) {
+        bodyBlocks.push_back(new BasicBlock(current_cfg, current_cfg->new_BB_name()));
+    }
+
+    // Constant propagation: collect all vars that may be assigned in any case,
+    // erase them from constMap before visiting any case body.
+    set<string> modifiedVars;
+    for (auto sc : ctx->switchCase()) {
+        set<string> vars = collectAssignedVars(sc);
+        modifiedVars.insert(vars.begin(), vars.end());
+    }
+    for (const string& var : modifiedVars) {
+        constMap.erase(var);
+    }
+    map<string, int> caseConstMap = constMap; // baseline for each case body
+
+    // Build comparison chain starting in the current block
+    if (cases.empty()) {
+        current_cfg->current_bb->exit_true = fallback;
+        current_cfg->current_bb->exit_false = nullptr;
+    } else {
+        for (size_t i = 0; i < cases.size(); i++) {
+            int caseVal = stoi(cases[i]->CONST()->getText());
+            string constVar = loadConst(caseVal);
+            string tmpVar = current_cfg->create_new_tempvar(INT);
+            current_cfg->current_bb->add_IRInstr(IRInstr::cmp_eq, INT, {tmpVar, switchVar, constVar});
+            current_cfg->current_bb->test_var_name = tmpVar;
+            current_cfg->current_bb->exit_true = bodyBlocks[i];
+
+            if (i + 1 < cases.size()) {
+                BasicBlock* bb_check = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+                current_cfg->current_bb->exit_false = bb_check;
+                current_cfg->add_bb(bb_check);
+            } else {
+                current_cfg->current_bb->exit_false = fallback;
+            }
+        }
+    }
+
+    // break jumps to bb_end; continue propagates to the outer loop
+    BasicBlock* outer_continue = loopStack.empty() ? nullptr : loopStack.back().continue_target;
+    loopStack.push_back({bb_end, outer_continue});
+
+    // Visit case bodies (fall-through between consecutive cases)
+    for (size_t i = 0; i < cases.size(); i++) {
+        current_cfg->add_bb(bodyBlocks[i]);
+        constMap = caseConstMap; // each case starts with a clean slate
+        for (auto stmt : cases[i]->statement()) {
+            this->visit(stmt);
+        }
+        if (!current_cfg->current_bb->has_return) {
+            BasicBlock* next;
+            if (i + 1 < bodyBlocks.size()) next = bodyBlocks[i + 1];
+            else if (bb_default) next = bb_default;
+            else next = bb_end;
+            current_cfg->current_bb->exit_true = next;
+            current_cfg->current_bb->exit_false = nullptr;
+        }
+    }
+
+    // Visit default body
+    if (defaultClause) {
+        current_cfg->add_bb(bb_default);
+        constMap = caseConstMap;
+        for (auto stmt : defaultClause->statement()) {
+            this->visit(stmt);
+        }
+        if (!current_cfg->current_bb->has_return) {
+            current_cfg->current_bb->exit_true = bb_end;
+            current_cfg->current_bb->exit_false = nullptr;
+        }
+    }
+
+    loopStack.pop_back();
+    constMap = caseConstMap; // after switch: modified vars already erased
+    current_cfg->add_bb(bb_end);
+    return 0;
+}
+
+// ===== && (short-circuit) =====
+
+antlrcpp::Any IRGenVisitor::visitLogicalAndExpr(ifccParser::LogicalAndExprContext *ctx) {
+    // Allocate result on stack — persists across the two blocks
+    string result = current_cfg->create_new_tempvar(INT);
+
+    // Default: false
+    current_cfg->current_bb->add_IRInstr(IRInstr::ldconst, INT, {result, "0"});
+
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    string leftVar = materialize(left);
+    if (left.type == DOUBLE) {
+        string tmp = current_cfg->create_new_tempvar(INT);
+        current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {tmp, leftVar});
+        leftVar = tmp;
+    }
+
+    BasicBlock* bb_eval_right = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_end        = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    // left == 0  → skip right (result stays 0) → exit_false = bb_end
+    // left != 0  → evaluate right              → exit_true  = bb_eval_right
+    current_cfg->current_bb->test_var_name = leftVar;
+    current_cfg->current_bb->exit_true  = bb_eval_right;
+    current_cfg->current_bb->exit_false = bb_end;
+
+    current_cfg->add_bb(bb_eval_right);
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
+    string rightVar = materialize(right);
+    if (right.type == DOUBLE) {
+        string tmp = current_cfg->create_new_tempvar(INT);
+        current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {tmp, rightVar});
+        rightVar = tmp;
+    }
+    // result = (right != 0)
+    string zero = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::ldconst, INT, {zero, "0"});
+    current_cfg->current_bb->add_IRInstr(IRInstr::cmp_neq, INT, {result, rightVar, zero});
+    current_cfg->current_bb->exit_true  = bb_end;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    current_cfg->add_bb(bb_end);
+
+    ExprValue res;
+    res.isConstant = false;
+    res.varName = result;
+    res.type = INT;
+    res.value = 0;
+    res.dvalue = 0.0;
+    return res;
+}
+
+// ===== || (short-circuit) =====
+
+antlrcpp::Any IRGenVisitor::visitLogicalOrExpr(ifccParser::LogicalOrExprContext *ctx) {
+    string result = current_cfg->create_new_tempvar(INT);
+
+    // Default: true (left non-zero → short-circuit with 1)
+    current_cfg->current_bb->add_IRInstr(IRInstr::ldconst, INT, {result, "1"});
+
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    string leftVar = materialize(left);
+    if (left.type == DOUBLE) {
+        string tmp = current_cfg->create_new_tempvar(INT);
+        current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {tmp, leftVar});
+        leftVar = tmp;
+    }
+
+    BasicBlock* bb_eval_right = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_end        = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    // left != 0  → result stays 1  → exit_true  = bb_end
+    // left == 0  → evaluate right  → exit_false = bb_eval_right
+    current_cfg->current_bb->test_var_name = leftVar;
+    current_cfg->current_bb->exit_true  = bb_end;
+    current_cfg->current_bb->exit_false = bb_eval_right;
+
+    current_cfg->add_bb(bb_eval_right);
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
+    string rightVar = materialize(right);
+    if (right.type == DOUBLE) {
+        string tmp = current_cfg->create_new_tempvar(INT);
+        current_cfg->current_bb->add_IRInstr(IRInstr::double_to_int, INT, {tmp, rightVar});
+        rightVar = tmp;
+    }
+    // result = (right != 0)
+    string zero = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::ldconst, INT, {zero, "0"});
+    current_cfg->current_bb->add_IRInstr(IRInstr::cmp_neq, INT, {result, rightVar, zero});
+    current_cfg->current_bb->exit_true  = bb_end;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    current_cfg->add_bb(bb_end);
+
+    ExprValue res;
+    res.isConstant = false;
+    res.varName = result;
+    res.type = INT;
+    res.value = 0;
+    res.dvalue = 0.0;
+    return res;
 }
