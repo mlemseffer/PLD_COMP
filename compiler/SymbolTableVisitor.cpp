@@ -79,6 +79,11 @@ antlrcpp::Any SymbolTableVisitor::visitProg(ifccParser::ProgContext *ctx) {
         }
     }
 
+    if (definedFunctions.find("main") == definedFunctions.end()) {
+        std::cerr << "error: undefined reference to 'main'" << std::endl;
+        hasError = true;
+    }
+
     return 0;
 }
 
