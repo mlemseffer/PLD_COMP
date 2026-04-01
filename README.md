@@ -518,6 +518,82 @@ switch (x) {
 
 ---
 
+### 4.25 — Types `void` et `char`, constantes caractères
+
+**Objectif** : Enrichir le système de types pour supporter `void` (fonctions sans valeur de retour) et `char` (constantes caractères).
+
+**Implémentation** :
+- **Grammaire** (`ifcc.g4`) : `type : 'int' | 'double' | 'void' | 'char'`. Nouveau token `CHAR_CONST : '\'' ( '\\' [nrt0\\'] | ~['\\\r\n] ) '\''` avec support des séquences d'échappement (`\n`, `\t`, `\r`, `\0`, `\\`, `\'`).
+- **Fonctions `void`** : une fonction déclarée `void` n'a pas besoin de `return` explicite. Le compilateur génère un épilogue sans valeur.
+- **Constantes caractères** : les littéraux comme `'A'`, `'\n'`, `'0'` sont traduits en leur valeur ASCII entière (ex: `'A'` → `65`).
+
+**Exemples testés** :
+```c
+void print_A() { putchar('A'); putchar('\n'); }
+int main() { print_A(); return 0; }
+```
+```c
+int a = 'A'; /* 65 */
+int b = '\n'; /* 10 */
+```
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`
+
+---
+
+### 4.26 — Opérateur modulo `%` et division entière
+
+**Objectif** : Supporter l'opérateur modulo `%` dans les expressions entières, aux côtés de `*` et `/`.
+
+**Implémentation** :
+- **Grammaire** : `mulDivModExpr : expr ('*' | '/' | '%') expr`.
+- **Instruction IR** : réutilisation de `div_int` — l'instruction `idivl` produit à la fois le quotient (dans `%eax`) et le reste (dans `%edx`). Pour le modulo, le résultat est lu depuis `%edx` au lieu de `%eax`.
+
+**Exemple testé** : `17 % 5 → 2`, `100 % 7 → 2` ✅
+
+**Fichiers modifiés** : `IR.h`, `IR.cpp`, `IRGenVisitor.cpp`
+
+---
+
+### 4.27 — Affectation comme expression (`assignExpr`)
+
+**Objectif** : L'affectation `a = b` est une **expression** à part entière en C, qui retourne la valeur affectée. Cela permet les chaînes `a = b = c = 5` et les motifs `if ((x = f()) > 0)`.
+
+**Implémentation** :
+- **Grammaire** : l'affectation est intégrée dans la règle `expr` avec associativité à droite : `<assoc=right> lvalue '=' expr`.
+- **Visiteur `visitAssignExpr`** : évalue la rvalue, effectue le `wmem` via lvalue, puis retourne un `ExprValue` contenant la valeur affectée. Cela permet aux expressions englobantes de la réutiliser.
+
+**Exemple testé** :
+```c
+a = b = c = 5;           // Chaîne d'affectation → a=b=c=5
+int e = (d = 20) + 5;    // d reçoit 20, e reçoit 25
+```
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.cpp`
+
+---
+
+### 4.28 — Portées de blocs (block scoping)
+
+**Objectif** : Supporter le masquage (shadowing) des variables dans les blocs imbriqués, comme en C standard.
+
+**Implémentation** :
+- Chaque bloc `{ ... }` crée un **scope** local. Une variable déclarée dans un bloc interne masque une variable de même nom dans un bloc englobant.
+- À la sortie du bloc, les variables locales redeviennent invisibles et les variables externes reprennent leur visibilité.
+
+**Exemple testé** :
+```c
+int a = 10; int res = 0;
+{ int a = 20; res = res + a; /* 20 */
+  { int a = 30; res = res + a; /* 50 */ }
+  res = res + a; /* 70 */ }
+res = res + a; /* 80 → return 80 */
+```
+
+**Fichiers modifiés** : `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`
+
+---
+
 ## Grammaire complète
 
 ```antlr
@@ -576,6 +652,10 @@ VAR : [a-zA-Z_][a-zA-Z_0-9]* ;
 CONST_DOUBLE : [0-9]+ '.' [0-9]* | '.' [0-9]+ ;
 CONST : [0-9]+ ;
 CHAR_CONST : '\'' ( '\\' [nrt0\\'] | ~['\\\r\n] ) '\'' ;
+COMMENT      : '/*' .*? '*/' -> skip ;
+LINE_COMMENT : '//' ~[\r\n]* -> skip ;
+DIRECTIVE    : '#' .*? '\n' -> skip ;
+WS           : [ \t\r\n] -> channel(HIDDEN) ;
 ```
 
 ---
@@ -610,10 +690,14 @@ Aucune nouvelle instruction IR n'a été nécessaire pour ces fonctionnalités �
 | `cmp_le` | `cmpl + setle` | Inférieur ou égal (`<=`) |
 | `cmp_gt` | `cmpl + setg` | Supérieur (`>`) |
 | `cmp_ge` | `cmpl + setge` | Supérieur ou égal (`>=`) |
+| `mod` | `cltd + idivl` (résultat dans `%edx`) | Modulo entier signé |
 | `call` | `movl args → regs; call func` | Appel de fonction (ABI System V) |
 | `lea` | `leaq src(%rbp), %rax; movq %rax, dest` | Charge l'adresse effective d'une variable |
 | `wmem` | `movq addr, %rax; movl val, (%rax)` | Écrit un int à l'adresse calculée |
 | `wmem_double` | `movq addr, %rax; movsd val, (%rax)` | Écrit un double à l'adresse calculée |
+| `rmem` | `movq addr, %rax; movl (%rax), dest` | Lit un int depuis une adresse calculée |
+| `rmem_double` | `movq addr, %rax; movsd (%rax), dest` | Lit un double depuis une adresse calculée |
+| `add_addr` | `addq offset, %rax` | Décale une adresse (accès tableau) |
 
 ---
 
@@ -633,25 +717,43 @@ gcc output.s -o output
 echo $?  # affiche le code de retour
 
 # Lancer la suite de tests
-cd ../testfiles
-./run_tests.sh
+python3 ifcc-test.py testfiles/*.c
 ```
+
+---
+
+## Intégration continue (CI/CD)
+
+Un pipeline **GitHub Actions** (`ci.yml`) s'exécute automatiquement sur chaque `push` et `pull_request` vers `main`/`master` :
+
+1. **Environnement** : Ubuntu 22.04
+2. **Dépendances** : JDK, g++, make, cmake, Python 3
+3. **ANTLR 4.13.2** : le runtime C++ est compilé depuis les sources pour matcher exactement la version locale
+4. **Build** : `make clean && make -j4` dans `compiler/`
+5. **Tests** : `python3 ifcc-test.py testfiles/*.c`
+
+> **Compatibilité std::any** : un wrapper `castAny<T>` (section 4.21) permet de compiler avec ANTLR 4.9 (`antlrcpp::Any::as<T>()`) et ANTLR 4.10+ (`std::any_cast<T>()`) sans aucune modification.
 
 ---
 
 ## Tests
 
-La suite de tests (`ifcc-test.py testfiles`) couvre **72 cas** (**72/72** ✅) :
+La suite de tests (`python3 ifcc-test.py testfiles/*.c`) couvre **72 cas** (**72/72** ✅) :
 - Retour de constantes et variables
-- Déclarations et affectations
-- Arithmétique complète (+, -, *, /, %, parenthèses, moins unaire, priorités)
-- Appels de fonctions (putchar, getchar, fonctions utilisateur, récursion)
+- Déclarations et affectations (avec/sans initialisation)
+- Arithmétique complète (`+`, `-`, `*`, `/`, `%`, parenthèses, moins unaire, priorités)
+- Appels de fonctions (`putchar`, `getchar`, fonctions utilisateur, récursion)
 - Fonctions multiples avec paramètres (jusqu'à 10 arguments)
-- Boucle while (factorielle itérative, Fibonacci, tableaux)
-- Return multiples (if/else imbriqués)
-- Tableaux unidimensionnels (int et double)
-- Flottants (double, conversions implicites)
-- Opérateurs bit-à-bit (`&`, `^`, `|`, `!`)
+- Fonctions `void` (sans valeur de retour)
+- Boucle `while` (factorielle itérative, Fibonacci, tableaux)
+- `return` multiples (`if`/`else` imbriqués)
+- Tableaux unidimensionnels (`int` et `double`)
+- Flottants (`double`, conversions implicites `int` ↔ `double`)
+- Constantes caractères (`'A'`, `'\n'`, `'\\`)
+- Opérateurs bit-à-bit (`&`, `^`, `|`)
+- Négation logique (`!`)
 - **Opérateurs logiques paresseux `&&` et `||`** (court-circuit réel)
-- **`break` et `continue`** dans les boucles while
-- **`switch...case`** avec fall-through, default, et break
+- **Affectation comme expression** (`a = b = c = 5`, `(d = 20) + 5`)
+- **Portées de blocs** (shadowing de variables imbriqué)
+- **`break` et `continue`** dans les boucles `while`
+- **`switch...case`** avec fall-through, `default`, et `break`
