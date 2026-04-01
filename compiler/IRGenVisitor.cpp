@@ -33,6 +33,41 @@ set<string> IRGenVisitor::collectAssignedVars(antlr4::tree::ParseTree* tree) {
     if (auto* declArrCtx = dynamic_cast<ifccParser::DeclArrayContext*>(tree)) {
         result.insert(declArrCtx->VAR()->getText());
     }
+    // ++x et --x modifient aussi la variable
+    if (auto* preInc = dynamic_cast<ifccParser::PreIncExprContext*>(tree)) {
+        result.insert(getScopedName(preInc->VAR()->getText()));
+    }
+    if (auto* preDec = dynamic_cast<ifccParser::PreDecExprContext*>(tree)) {
+        result.insert(getScopedName(preDec->VAR()->getText()));
+    }
+    // x++ et x-- (statements)
+    if (auto* postInc = dynamic_cast<ifccParser::PostIncStmtContext*>(tree)) {
+        result.insert(getScopedName(postInc->VAR()->getText()));
+    }
+    if (auto* postDec = dynamic_cast<ifccParser::PostDecStmtContext*>(tree)) {
+        result.insert(getScopedName(postDec->VAR()->getText()));
+    }
+    // Compound assignments (+=, -=, etc.)
+    if (auto* plusAsgn = dynamic_cast<ifccParser::PlusAssignExprContext*>(tree)) {
+        if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(plusAsgn->lvalue()))
+            result.insert(getScopedName(lvVar->VAR()->getText()));
+    }
+    if (auto* minusAsgn = dynamic_cast<ifccParser::MinusAssignExprContext*>(tree)) {
+        if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(minusAsgn->lvalue()))
+            result.insert(getScopedName(lvVar->VAR()->getText()));
+    }
+    if (auto* mulAsgn = dynamic_cast<ifccParser::MulAssignExprContext*>(tree)) {
+        if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(mulAsgn->lvalue()))
+            result.insert(getScopedName(lvVar->VAR()->getText()));
+    }
+    if (auto* divAsgn = dynamic_cast<ifccParser::DivAssignExprContext*>(tree)) {
+        if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(divAsgn->lvalue()))
+            result.insert(getScopedName(lvVar->VAR()->getText()));
+    }
+    if (auto* modAsgn = dynamic_cast<ifccParser::ModAssignExprContext*>(tree)) {
+        if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(modAsgn->lvalue()))
+            result.insert(getScopedName(lvVar->VAR()->getText()));
+    }
     for (size_t i = 0; i < tree->children.size(); i++) {
         set<string> childVars = collectAssignedVars(tree->children[i]);
         result.insert(childVars.begin(), childVars.end());
@@ -998,8 +1033,10 @@ antlrcpp::Any IRGenVisitor::visitWhileStmt(ifccParser::WhileStmtContext *ctx) {
     current_cfg->current_bb->exit_true = bb_body;
     current_cfg->current_bb->exit_false = bb_end;
 
+    loopStack.push_back({bb_cond, bb_end});
     current_cfg->add_bb(bb_body);
     this->visit(ctx->statement());
+    loopStack.pop_back();
     if (!current_cfg->current_bb->has_return) {
         current_cfg->current_bb->exit_true = bb_cond;
         current_cfg->current_bb->exit_false = nullptr;
@@ -1008,4 +1045,450 @@ antlrcpp::Any IRGenVisitor::visitWhileStmt(ifccParser::WhileStmtContext *ctx) {
     current_cfg->add_bb(bb_end);
 
     return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitForStmt(ifccParser::ForStmtContext *ctx) {
+    pushScope();
+
+    // Déterminer quels expr() correspondent à init, cond, update
+    bool hasDecl = ctx->declaration() != nullptr;
+    int numExprs = ctx->expr().size();
+    int condIdx = -1, updateIdx = -1, initExprIdx = -1;
+
+    if (hasDecl) {
+        this->visit(ctx->declaration());
+        if (numExprs >= 1) condIdx = 0;
+        if (numExprs >= 2) updateIdx = 1;
+    } else {
+        if (numExprs == 3) { initExprIdx = 0; condIdx = 1; updateIdx = 2; }
+        else if (numExprs == 2) { condIdx = 0; updateIdx = 1; }
+        else if (numExprs == 1) { condIdx = 0; }
+    }
+
+    // Exécuter init expr si présent
+    if (initExprIdx >= 0) {
+        this->visit(ctx->expr(initExprIdx));
+    }
+
+    // Invalider les constantes APRÈS l'init (les noms scopés existent maintenant)
+    set<string> modifiedVars = collectAssignedVars(ctx->statement());
+    for (auto expr : ctx->expr()) {
+        set<string> exprVars = collectAssignedVars(expr);
+        modifiedVars.insert(exprVars.begin(), exprVars.end());
+    }
+    if (hasDecl) {
+        // La variable d'itération elle-même est modifiée par l'update
+        if (auto* dv = dynamic_cast<ifccParser::DeclVarContext*>(ctx->declaration())) {
+            modifiedVars.insert(getScopedName(dv->VAR()->getText()));
+        }
+    }
+    for (const string& var : modifiedVars) {
+        constMap.erase(var);
+    }
+
+    BasicBlock* bb_cond = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_body = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_update = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_end = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    current_cfg->current_bb->exit_true = bb_cond;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    // Bloc condition
+    current_cfg->add_bb(bb_cond);
+    if (condIdx >= 0) {
+        ExprValue cond = castAny<ExprValue>(this->visit(ctx->expr(condIdx)));
+        string condVar = cond.isConstant ? loadConst(cond.value) : cond.varName;
+        current_cfg->current_bb->test_var_name = condVar;
+    } else {
+        string alwaysTrue = loadConst(1);
+        current_cfg->current_bb->test_var_name = alwaysTrue;
+    }
+    current_cfg->current_bb->exit_true = bb_body;
+    current_cfg->current_bb->exit_false = bb_end;
+
+    // continue va vers bb_update
+    loopStack.push_back({bb_update, bb_end});
+    current_cfg->add_bb(bb_body);
+    this->visit(ctx->statement());
+    if (!current_cfg->current_bb->has_return) {
+        current_cfg->current_bb->exit_true = bb_update;
+        current_cfg->current_bb->exit_false = nullptr;
+    }
+    loopStack.pop_back();
+
+    // Bloc update
+    current_cfg->add_bb(bb_update);
+    if (updateIdx >= 0) {
+        this->visit(ctx->expr(updateIdx));
+    }
+    current_cfg->current_bb->exit_true = bb_cond;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    current_cfg->add_bb(bb_end);
+    popScope();
+    return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitBreakStmt(ifccParser::BreakStmtContext *ctx) {
+    if (!loopStack.empty()) {
+        current_cfg->current_bb->exit_true = loopStack.back().bb_end;
+        current_cfg->current_bb->exit_false = nullptr;
+        current_cfg->current_bb->has_return = true;
+        BasicBlock* dead_bb = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+        current_cfg->add_bb(dead_bb);
+    }
+    return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitContinueStmt(ifccParser::ContinueStmtContext *ctx) {
+    if (!loopStack.empty()) {
+        current_cfg->current_bb->exit_true = loopStack.back().bb_cond;
+        current_cfg->current_bb->exit_false = nullptr;
+        current_cfg->current_bb->has_return = true;
+        BasicBlock* dead_bb = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+        current_cfg->add_bb(dead_bb);
+    }
+    return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitShiftExpr(ifccParser::ShiftExprContext *ctx) {
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
+    string op = ctx->children[1]->getText();
+
+    if (left.isConstant && right.isConstant && left.type == INT && right.type == INT) {
+        ExprValue result;
+        result.isConstant = true;
+        result.type = INT;
+        result.dvalue = 0.0;
+        if (op == "<<") result.value = left.value << right.value;
+        else result.value = left.value >> right.value;
+        return result;
+    }
+
+    string leftVar = materialize(left);
+    string rightVar = materialize(right);
+    string dest = current_cfg->create_new_tempvar(INT);
+    if (op == "<<") {
+        current_cfg->current_bb->add_IRInstr(IRInstr::shl, INT, {dest, leftVar, rightVar});
+    } else {
+        current_cfg->current_bb->add_IRInstr(IRInstr::shr, INT, {dest, leftVar, rightVar});
+    }
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = dest;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitLogicalAndExpr(ifccParser::LogicalAndExprContext *ctx) {
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+
+    if (left.isConstant && left.type == INT && left.value == 0) {
+        ExprValue result;
+        result.isConstant = true;
+        result.type = INT;
+        result.value = 0;
+        result.dvalue = 0.0;
+        return result;
+    }
+
+    string resultVar = current_cfg->create_new_tempvar(INT);
+    string leftVar = materialize(left);
+    current_cfg->current_bb->add_IRInstr(IRInstr::ldconst, INT, {resultVar, "0"});
+    current_cfg->current_bb->test_var_name = leftVar;
+
+    BasicBlock* bb_right = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_end = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    current_cfg->current_bb->exit_true = bb_right;
+    current_cfg->current_bb->exit_false = bb_end;
+
+    current_cfg->add_bb(bb_right);
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
+    string rightVar = materialize(right);
+    string zero = loadConst(0);
+    current_cfg->current_bb->add_IRInstr(IRInstr::cmp_neq, INT, {resultVar, rightVar, zero});
+    current_cfg->current_bb->exit_true = bb_end;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    current_cfg->add_bb(bb_end);
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = resultVar;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitLogicalOrExpr(ifccParser::LogicalOrExprContext *ctx) {
+    ExprValue left = castAny<ExprValue>(this->visit(ctx->expr(0)));
+
+    if (left.isConstant && left.type == INT && left.value != 0) {
+        ExprValue result;
+        result.isConstant = true;
+        result.type = INT;
+        result.value = 1;
+        result.dvalue = 0.0;
+        return result;
+    }
+
+    string resultVar = current_cfg->create_new_tempvar(INT);
+    string leftVar = materialize(left);
+    current_cfg->current_bb->add_IRInstr(IRInstr::ldconst, INT, {resultVar, "1"});
+    current_cfg->current_bb->test_var_name = leftVar;
+
+    BasicBlock* bb_right = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_end = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    current_cfg->current_bb->exit_true = bb_end;
+    current_cfg->current_bb->exit_false = bb_right;
+
+    current_cfg->add_bb(bb_right);
+    ExprValue right = castAny<ExprValue>(this->visit(ctx->expr(1)));
+    string rightVar = materialize(right);
+    string zero = loadConst(0);
+    current_cfg->current_bb->add_IRInstr(IRInstr::cmp_neq, INT, {resultVar, rightVar, zero});
+    current_cfg->current_bb->exit_true = bb_end;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    current_cfg->add_bb(bb_end);
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = resultVar;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitPreIncExpr(ifccParser::PreIncExprContext *ctx) {
+    string varName = getScopedName(ctx->VAR()->getText());
+    string addrTemp = current_cfg->create_new_tempvar(ADDR);
+    current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {addrTemp, varName});
+    string oldVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::rmem, INT, {oldVal, addrTemp});
+    string one = loadConst(1);
+    string newVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::add, INT, {newVal, oldVal, one});
+    current_cfg->current_bb->add_IRInstr(IRInstr::wmem, INT, {addrTemp, newVal});
+    constMap.erase(varName);
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = newVal;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitPreDecExpr(ifccParser::PreDecExprContext *ctx) {
+    string varName = getScopedName(ctx->VAR()->getText());
+    string addrTemp = current_cfg->create_new_tempvar(ADDR);
+    current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {addrTemp, varName});
+    string oldVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::rmem, INT, {oldVal, addrTemp});
+    string one = loadConst(1);
+    string newVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::sub, INT, {newVal, oldVal, one});
+    current_cfg->current_bb->add_IRInstr(IRInstr::wmem, INT, {addrTemp, newVal});
+    constMap.erase(varName);
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = newVal;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitPostIncStmt(ifccParser::PostIncStmtContext *ctx) {
+    string varName = getScopedName(ctx->VAR()->getText());
+    string addrTemp = current_cfg->create_new_tempvar(ADDR);
+    current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {addrTemp, varName});
+    string oldVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::rmem, INT, {oldVal, addrTemp});
+    string one = loadConst(1);
+    string newVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::add, INT, {newVal, oldVal, one});
+    current_cfg->current_bb->add_IRInstr(IRInstr::wmem, INT, {addrTemp, newVal});
+    constMap.erase(varName);
+    return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitPostDecStmt(ifccParser::PostDecStmtContext *ctx) {
+    string varName = getScopedName(ctx->VAR()->getText());
+    string addrTemp = current_cfg->create_new_tempvar(ADDR);
+    current_cfg->current_bb->add_IRInstr(IRInstr::lea, ADDR, {addrTemp, varName});
+    string oldVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::rmem, INT, {oldVal, addrTemp});
+    string one = loadConst(1);
+    string newVal = current_cfg->create_new_tempvar(INT);
+    current_cfg->current_bb->add_IRInstr(IRInstr::sub, INT, {newVal, oldVal, one});
+    current_cfg->current_bb->add_IRInstr(IRInstr::wmem, INT, {addrTemp, newVal});
+    constMap.erase(varName);
+    return 0;
+}
+
+ExprValue IRGenVisitor::emitCompoundAssign(ifccParser::LvalueContext* lvalueCtx, ifccParser::ExprContext* exprCtx, string op) {
+    ExprValue exprResult = castAny<ExprValue>(this->visit(exprCtx));
+    LvalueResult lv = castAny<LvalueResult>(this->visit(lvalueCtx));
+    Type varType = lv.type;
+
+    string currentVal = current_cfg->create_new_tempvar(varType);
+    if (varType == DOUBLE) {
+        current_cfg->current_bb->add_IRInstr(IRInstr::rmem_double, DOUBLE, {currentVal, lv.addrVar});
+    } else {
+        current_cfg->current_bb->add_IRInstr(IRInstr::rmem, INT, {currentVal, lv.addrVar});
+    }
+
+    if (exprResult.type != varType) emitConversion(exprResult, varType);
+    string rhsVar = materialize(exprResult);
+    string dest = current_cfg->create_new_tempvar(varType);
+
+    if (op == "+") current_cfg->current_bb->add_IRInstr(varType == DOUBLE ? IRInstr::add_double : IRInstr::add, varType, {dest, currentVal, rhsVar});
+    else if (op == "-") current_cfg->current_bb->add_IRInstr(varType == DOUBLE ? IRInstr::sub_double : IRInstr::sub, varType, {dest, currentVal, rhsVar});
+    else if (op == "*") current_cfg->current_bb->add_IRInstr(varType == DOUBLE ? IRInstr::mul_double : IRInstr::mul, varType, {dest, currentVal, rhsVar});
+    else if (op == "/") current_cfg->current_bb->add_IRInstr(varType == DOUBLE ? IRInstr::div_double : IRInstr::div_int, varType, {dest, currentVal, rhsVar});
+    else if (op == "%") current_cfg->current_bb->add_IRInstr(IRInstr::mod_int, INT, {dest, currentVal, rhsVar});
+
+    if (varType == DOUBLE) current_cfg->current_bb->add_IRInstr(IRInstr::wmem_double, DOUBLE, {lv.addrVar, dest});
+    else current_cfg->current_bb->add_IRInstr(IRInstr::wmem, INT, {lv.addrVar, dest});
+
+    if (auto* lvVar = dynamic_cast<ifccParser::LvalueVarContext*>(lvalueCtx)) {
+        constMap.erase(getScopedName(lvVar->VAR()->getText()));
+    }
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = dest;
+    result.type = varType;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
+}
+
+antlrcpp::Any IRGenVisitor::visitPlusAssignExpr(ifccParser::PlusAssignExprContext *ctx) {
+    return emitCompoundAssign(ctx->lvalue(), ctx->expr(), "+");
+}
+antlrcpp::Any IRGenVisitor::visitMinusAssignExpr(ifccParser::MinusAssignExprContext *ctx) {
+    return emitCompoundAssign(ctx->lvalue(), ctx->expr(), "-");
+}
+antlrcpp::Any IRGenVisitor::visitMulAssignExpr(ifccParser::MulAssignExprContext *ctx) {
+    return emitCompoundAssign(ctx->lvalue(), ctx->expr(), "*");
+}
+antlrcpp::Any IRGenVisitor::visitDivAssignExpr(ifccParser::DivAssignExprContext *ctx) {
+    return emitCompoundAssign(ctx->lvalue(), ctx->expr(), "/");
+}
+antlrcpp::Any IRGenVisitor::visitModAssignExpr(ifccParser::ModAssignExprContext *ctx) {
+    return emitCompoundAssign(ctx->lvalue(), ctx->expr(), "%");
+}
+
+antlrcpp::Any IRGenVisitor::visitReturn_void_stmt(ifccParser::Return_void_stmtContext *ctx) {
+    // Pour les fonctions void : pas d'expression à évaluer
+    current_cfg->current_bb->exit_true = exit_bb;
+    current_cfg->current_bb->exit_false = nullptr;
+    current_cfg->current_bb->has_return = true;
+
+    BasicBlock* dead_bb = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    current_cfg->add_bb(dead_bb);
+
+    return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitDoWhileStmt(ifccParser::DoWhileStmtContext *ctx) {
+    set<string> modifiedVars = collectAssignedVars(ctx->statement());
+    for (const string& var : modifiedVars) {
+        constMap.erase(var);
+    }
+
+    BasicBlock* bb_body = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_cond = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_end = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    // Saut direct vers le corps (pas de test initial)
+    current_cfg->current_bb->exit_true = bb_body;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    // Corps de la boucle
+    loopStack.push_back({bb_cond, bb_end});
+    current_cfg->add_bb(bb_body);
+    this->visit(ctx->statement());
+    if (!current_cfg->current_bb->has_return) {
+        current_cfg->current_bb->exit_true = bb_cond;
+        current_cfg->current_bb->exit_false = nullptr;
+    }
+    loopStack.pop_back();
+
+    // Condition (après le corps)
+    current_cfg->add_bb(bb_cond);
+    ExprValue cond = castAny<ExprValue>(this->visit(ctx->expr()));
+    string condVar = cond.isConstant ? loadConst(cond.value) : cond.varName;
+    current_cfg->current_bb->test_var_name = condVar;
+    current_cfg->current_bb->exit_true = bb_body;   // si vrai → retour au corps
+    current_cfg->current_bb->exit_false = bb_end;    // si faux → sortie
+
+    current_cfg->add_bb(bb_end);
+    return 0;
+}
+
+antlrcpp::Any IRGenVisitor::visitTernaryExpr(ifccParser::TernaryExprContext *ctx) {
+    // Évaluer la condition
+    ExprValue cond = castAny<ExprValue>(this->visit(ctx->expr(0)));
+
+    // Constant folding : si la condition est constante, on n'évalue qu'une branche
+    if (cond.isConstant && cond.type == INT) {
+        if (cond.value != 0) {
+            return this->visit(ctx->expr(1));  // branche vraie
+        } else {
+            return this->visit(ctx->expr(2));  // branche fausse
+        }
+    }
+
+    string condVar = materialize(cond);
+
+    // Variable résultat
+    string resultVar = current_cfg->create_new_tempvar(INT);
+
+    current_cfg->current_bb->test_var_name = condVar;
+
+    BasicBlock* bb_true = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_false = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+    BasicBlock* bb_end = new BasicBlock(current_cfg, current_cfg->new_BB_name());
+
+    current_cfg->current_bb->exit_true = bb_true;
+    current_cfg->current_bb->exit_false = bb_false;
+
+    // Branche vraie
+    current_cfg->add_bb(bb_true);
+    ExprValue trueVal = castAny<ExprValue>(this->visit(ctx->expr(1)));
+    string trueVar = materialize(trueVal);
+    current_cfg->current_bb->add_IRInstr(IRInstr::copy, INT, {resultVar, trueVar});
+    current_cfg->current_bb->exit_true = bb_end;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    // Branche fausse
+    current_cfg->add_bb(bb_false);
+    ExprValue falseVal = castAny<ExprValue>(this->visit(ctx->expr(2)));
+    string falseVar = materialize(falseVal);
+    current_cfg->current_bb->add_IRInstr(IRInstr::copy, INT, {resultVar, falseVar});
+    current_cfg->current_bb->exit_true = bb_end;
+    current_cfg->current_bb->exit_false = nullptr;
+
+    current_cfg->add_bb(bb_end);
+
+    ExprValue result;
+    result.isConstant = false;
+    result.varName = resultVar;
+    result.type = INT;
+    result.value = 0;
+    result.dvalue = 0.0;
+    return result;
 }

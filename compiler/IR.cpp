@@ -10,6 +10,14 @@ IRInstr::IRInstr(BasicBlock* bb_, Operation op, Type t, vector<string> params)
     : bb(bb_), op(op), t(t), params(params) {}
 
 void IRInstr::gen_asm(ostream &o) {
+    if (bb->cfg->target == "arm64") {
+        gen_asm_arm64(o);
+    } else {
+        gen_asm_x86(o);
+    }
+}
+
+void IRInstr::gen_asm_x86(ostream &o) {
     string dest, src1, src2;
     switch(op) {
         case ldconst:
@@ -351,8 +359,265 @@ void IRInstr::gen_asm(ostream &o) {
             o << "    movl %eax, " << dest << "\n";
             break;
 
+        case shl:
+            src1 = bb->cfg->IR_reg_to_asm(params[1]);
+            src2 = bb->cfg->IR_reg_to_asm(params[2]);
+            dest = bb->cfg->IR_reg_to_asm(params[0]);
+            o << "    movl " << src2 << ", %ecx\n";
+            o << "    movl " << src1 << ", %eax\n";
+            o << "    sall %cl, %eax\n";
+            o << "    movl %eax, " << dest << "\n";
+            break;
+
+        case shr:
+            src1 = bb->cfg->IR_reg_to_asm(params[1]);
+            src2 = bb->cfg->IR_reg_to_asm(params[2]);
+            dest = bb->cfg->IR_reg_to_asm(params[0]);
+            o << "    movl " << src2 << ", %ecx\n";
+            o << "    movl " << src1 << ", %eax\n";
+            o << "    sarl %cl, %eax\n";
+            o << "    movl %eax, " << dest << "\n";
+            break;
+
         default:
             o << "    # unsupported IR instruction\n";
+            break;
+    }
+}
+
+// ==================== IRInstr ARM64 backend ====================
+
+void IRInstr::gen_asm_arm64(ostream &o) {
+    auto& cfg = *bb->cfg;
+    switch(op) {
+        case ldconst: {
+            int val = stoi(params[1]);
+            unsigned int uval = (unsigned int)val;
+            if (val >= -65535 && val <= 65535) {
+                o << "    mov w8, #" << val << "\n";
+            } else {
+                o << "    movz w8, #" << (uval & 0xFFFF) << "\n";
+                o << "    movk w8, #" << ((uval >> 16) & 0xFFFF) << ", lsl #16\n";
+            }
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+        }
+
+        case ldconst_double:
+            o << "    // double not supported on ARM64 backend\n";
+            break;
+
+        case copy:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case copy_double:
+            o << "    // double not supported on ARM64 backend\n";
+            break;
+
+        case add:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    add w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case sub:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    sub w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case mul:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    mul w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case div_int:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    sdiv w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case mod_int:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    sdiv w10, w8, w9\n";
+            o << "    msub w8, w10, w9, w8\n"; // w8 = w8 - w10*w9
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case add_double: case sub_double: case mul_double: case div_double:
+        case int_to_double: case double_to_int:
+        case rmem_double: case wmem_double:
+            o << "    // double not supported on ARM64 backend\n";
+            break;
+
+        case cmp_eq:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    cmp w8, w9\n";
+            o << "    cset w8, eq\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case cmp_neq:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    cmp w8, w9\n";
+            o << "    cset w8, ne\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case cmp_lt:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    cmp w8, w9\n";
+            o << "    cset w8, lt\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case cmp_le:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    cmp w8, w9\n";
+            o << "    cset w8, le\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case cmp_gt:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    cmp w8, w9\n";
+            o << "    cset w8, gt\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case cmp_ge:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    cmp w8, w9\n";
+            o << "    cset w8, ge\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case bit_and:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    and w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case bit_xor:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    eor w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case bit_or:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    orr w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case logical_not:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            o << "    cmp w8, #0\n";
+            o << "    cset w8, eq\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case shl:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    lsl w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case shr:
+            cfg.arm64_load_w(o, "w8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    asr w8, w8, w9\n";
+            cfg.arm64_store_w(o, "w8", params[0]);
+            break;
+
+        case lea: {
+            // dest = &src_var
+            int offset = cfg.SymbolIndex[params[1]];
+            o << "    sub x8, x29, #" << offset << "\n";
+            cfg.arm64_store_x(o, "x8", params[0]);
+            break;
+        }
+
+        case rmem:
+            // dest = *(int*)addr_var
+            cfg.arm64_load_x(o, "x8", params[1]);
+            o << "    ldr w9, [x8]\n";
+            cfg.arm64_store_w(o, "w9", params[0]);
+            break;
+
+        case wmem:
+            // *(int*)addr_var = value_var
+            cfg.arm64_load_x(o, "x8", params[0]);
+            cfg.arm64_load_w(o, "w9", params[1]);
+            o << "    str w9, [x8]\n";
+            break;
+
+        case add_addr:
+            // dest = addr + (int64)offset_int
+            cfg.arm64_load_x(o, "x8", params[1]);
+            cfg.arm64_load_w(o, "w9", params[2]);
+            o << "    sxtw x9, w9\n"; // sign-extend 32→64
+            o << "    add x8, x8, x9\n";
+            cfg.arm64_store_x(o, "x8", params[0]);
+            break;
+
+        case call: {
+            int numArgs = params.size() - 2;
+            string armArgRegs[] = {"w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7"};
+            int extraArgs = (numArgs > 8) ? (numArgs - 8) : 0;
+
+            // Réserver de l'espace pour les args sur la pile (aligné 16)
+            int stackArgSpace = ((extraArgs * 8 + 15) & ~15);
+            if (stackArgSpace > 0) {
+                o << "    sub sp, sp, #" << stackArgSpace << "\n";
+            }
+
+            // Empiler les arguments au-delà du 8e
+            for (int i = 8; i < numArgs; i++) {
+                cfg.arm64_load_w(o, "w8", params[i + 2]);
+                o << "    sxtw x8, w8\n";
+                o << "    str x8, [sp, #" << (i - 8) * 8 << "]\n";
+            }
+
+            // Charger les 8 premiers arguments dans les registres
+            for (int i = 0; i < numArgs && i < 8; i++) {
+                cfg.arm64_load_w(o, armArgRegs[i], params[i + 2]);
+            }
+
+            #ifdef __APPLE__
+            o << "    bl _" << params[1] << "\n";
+            #else
+            o << "    bl " << params[1] << "\n";
+            #endif
+
+            if (stackArgSpace > 0) {
+                o << "    add sp, sp, #" << stackArgSpace << "\n";
+            }
+
+            cfg.arm64_store_w(o, "w0", params[0]);
+            break;
+        }
+
+        default:
+            o << "    // unsupported IR instruction on ARM64\n";
             break;
     }
 }
@@ -363,26 +628,43 @@ BasicBlock::BasicBlock(CFG* cfg, string entry_label)
     : cfg(cfg), label(entry_label), exit_true(nullptr), exit_false(nullptr) {}
 
 void BasicBlock::gen_asm(ostream &o) {
-    // Émettre le label du bloc
-    o << label << ":\n";
+    if (cfg->target == "arm64") {
+        gen_asm_arm64(o);
+    } else {
+        gen_asm_x86(o);
+    }
+}
 
-    // Générer le code de chaque instruction
+void BasicBlock::gen_asm_x86(ostream &o) {
+    o << label << ":\n";
     for (auto instr : instrs) {
         instr->gen_asm(o);
     }
-
-    // Gestion des sauts en sortie de bloc
     if (exit_true == nullptr) {
-        // Dernier bloc → épilogue (leave + ret)
         cfg->gen_asm_epilogue(o);
     } else if (exit_false == nullptr) {
-        // Saut inconditionnel vers exit_true
         o << "    jmp " << exit_true->label << "\n";
     } else {
-        // Branchement conditionnel (pour if/while)
         o << "    cmpl $0, " << cfg->IR_reg_to_asm(test_var_name) << "\n";
         o << "    je " << exit_false->label << "\n";
         o << "    jmp " << exit_true->label << "\n";
+    }
+}
+
+void BasicBlock::gen_asm_arm64(ostream &o) {
+    o << label << ":\n";
+    for (auto instr : instrs) {
+        instr->gen_asm(o);
+    }
+    if (exit_true == nullptr) {
+        cfg->gen_asm_epilogue(o);
+    } else if (exit_false == nullptr) {
+        o << "    b " << exit_true->label << "\n";
+    } else {
+        cfg->arm64_load_w(o, "w8", test_var_name);
+        o << "    cmp w8, #0\n";
+        o << "    b.eq " << exit_false->label << "\n";
+        o << "    b " << exit_true->label << "\n";
     }
 }
 
@@ -401,23 +683,28 @@ void CFG::add_bb(BasicBlock* bb) {
 }
 
 void CFG::gen_asm(ostream &o) {
-    // Émettre la section .rodata pour les constantes double de ce CFG
-    if (!doubleConstants.empty()) {
-        o << "    .section .rodata\n";
-        for (auto& [label, val] : doubleConstants) {
-            o << "    .align 8\n";
-            o << label << ":\n";
-            // Écrire la représentation binaire IEEE 754 du double comme .quad
-            uint64_t bits;
-            memcpy(&bits, &val, sizeof(bits));
-            o << "    .quad " << bits << "\n";
+    if (target == "arm64") {
+        gen_asm_prologue_arm64(o);
+        for (auto bb : bbs) {
+            bb->gen_asm(o);
         }
-        o << "    .text\n";
-    }
-
-    gen_asm_prologue(o);
-    for (auto bb : bbs) {
-        bb->gen_asm(o);
+    } else {
+        // Émettre la section .rodata pour les constantes double de ce CFG
+        if (!doubleConstants.empty()) {
+            o << "    .section .rodata\n";
+            for (auto& [label, val] : doubleConstants) {
+                o << "    .align 8\n";
+                o << label << ":\n";
+                uint64_t bits;
+                memcpy(&bits, &val, sizeof(bits));
+                o << "    .quad " << bits << "\n";
+            }
+            o << "    .text\n";
+        }
+        gen_asm_prologue(o);
+        for (auto bb : bbs) {
+            bb->gen_asm(o);
+        }
     }
 }
 
@@ -458,16 +745,24 @@ void CFG::gen_asm_prologue(ostream &o) {
 }
 
 void CFG::gen_asm_epilogue(ostream &o) {
-    // Charger la valeur de retour
-    if (SymbolIndex.find("!retval") != SymbolIndex.end()) {
-        if (returnType == DOUBLE) {
-            o << "    movsd " << IR_reg_to_asm("!retval") << ", %xmm0\n";
-        } else {
-            o << "    movl " << IR_reg_to_asm("!retval") << ", %eax\n";
+    if (target == "arm64") {
+        if (SymbolIndex.find("!retval") != SymbolIndex.end()) {
+            arm64_load_w(o, "w0", "!retval");
         }
+        o << "    mov sp, x29\n";
+        o << "    ldp x29, x30, [sp], #16\n";
+        o << "    ret\n";
+    } else {
+        if (SymbolIndex.find("!retval") != SymbolIndex.end()) {
+            if (returnType == DOUBLE) {
+                o << "    movsd " << IR_reg_to_asm("!retval") << ", %xmm0\n";
+            } else {
+                o << "    movl " << IR_reg_to_asm("!retval") << ", %eax\n";
+            }
+        }
+        o << "    leave\n";
+        o << "    ret\n";
     }
-    o << "    leave\n";
-    o << "    ret\n";
 }
 
 void CFG::add_to_symbol_table(string name, Type t) {
@@ -519,4 +814,88 @@ Type CFG::get_array_element_type(string name) {
 
 string CFG::new_BB_name() {
     return ".LBB_" + funcName + "_" + to_string(nextBBnumber++);
+}
+
+// ==================== ARM64 helpers ====================
+
+void CFG::arm64_load_w(ostream& o, string wreg, string ir_var) {
+    // Pseudo-registres ABI x86 → ARM64
+    if (ir_var == "!edi") { if (wreg != "w0") o << "    mov " << wreg << ", w0\n"; return; }
+    if (ir_var == "!esi") { if (wreg != "w1") o << "    mov " << wreg << ", w1\n"; return; }
+    if (ir_var == "!edx") { if (wreg != "w2") o << "    mov " << wreg << ", w2\n"; return; }
+    if (ir_var == "!ecx") { if (wreg != "w3") o << "    mov " << wreg << ", w3\n"; return; }
+    if (ir_var == "!r8d") { if (wreg != "w4") o << "    mov " << wreg << ", w4\n"; return; }
+    if (ir_var == "!r9d") { if (wreg != "w5") o << "    mov " << wreg << ", w5\n"; return; }
+
+    // Paramètres au-delà du 6e (index x86) → sur ARM64, les params 6 et 7 sont encore en registre
+    if (ir_var.find("!param") == 0) {
+        int index = stoi(ir_var.substr(6));
+        if (index < 8) {
+            string armReg = "w" + to_string(index);
+            if (wreg != armReg) o << "    mov " << wreg << ", " << armReg << "\n";
+        } else {
+            int offset = 16 + (index - 8) * 8;
+            o << "    ldur " << wreg << ", [x29, #" << offset << "]\n";
+        }
+        return;
+    }
+
+    // Variable sur la pile (offset négatif par rapport à x29)
+    int offset = SymbolIndex[ir_var];
+    if (offset <= 255) {
+        o << "    ldur " << wreg << ", [x29, #-" << offset << "]\n";
+    } else {
+        o << "    sub x11, x29, #" << offset << "\n";
+        o << "    ldr " << wreg << ", [x11]\n";
+    }
+}
+
+void CFG::arm64_store_w(ostream& o, string wreg, string ir_var) {
+    int offset = SymbolIndex[ir_var];
+    if (offset <= 255) {
+        o << "    stur " << wreg << ", [x29, #-" << offset << "]\n";
+    } else {
+        o << "    sub x11, x29, #" << offset << "\n";
+        o << "    str " << wreg << ", [x11]\n";
+    }
+}
+
+void CFG::arm64_load_x(ostream& o, string xreg, string ir_var) {
+    int offset = SymbolIndex[ir_var];
+    if (offset <= 255) {
+        o << "    ldur " << xreg << ", [x29, #-" << offset << "]\n";
+    } else {
+        o << "    sub x11, x29, #" << offset << "\n";
+        o << "    ldr " << xreg << ", [x11]\n";
+    }
+}
+
+void CFG::arm64_store_x(ostream& o, string xreg, string ir_var) {
+    int offset = SymbolIndex[ir_var];
+    if (offset <= 255) {
+        o << "    stur " << xreg << ", [x29, #-" << offset << "]\n";
+    } else {
+        o << "    sub x11, x29, #" << offset << "\n";
+        o << "    str " << xreg << ", [x11]\n";
+    }
+}
+
+void CFG::gen_asm_prologue_arm64(ostream& o) {
+    #ifdef __APPLE__
+    o << ".globl _" << funcName << "\n";
+    o << ".p2align 2\n";
+    o << "_" << funcName << ":\n";
+    #else
+    o << ".globl " << funcName << "\n";
+    o << ".p2align 2\n";
+    o << funcName << ":\n";
+    #endif
+    // Sauvegarder le frame pointer et le link register
+    o << "    stp x29, x30, [sp, #-16]!\n";
+    o << "    mov x29, sp\n";
+    // Réserver de l'espace pour les variables locales (arrondi à 16)
+    int stackSize = ((nextFreeSymbolIndex + 15) & ~15);
+    if (stackSize > 0) {
+        o << "    sub sp, sp, #" << stackSize << "\n";
+    }
 }

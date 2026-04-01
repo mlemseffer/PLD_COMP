@@ -55,7 +55,9 @@ class IRInstr {
 		bit_and,   // AND bit-à-bit
 		bit_xor,   // XOR bit-à-bit
 		bit_or,    // OR bit-à-bit
-		logical_not // NOT logique : !x (0→1, non-zéro→0)
+		logical_not, // NOT logique : !x (0→1, non-zéro→0)
+		shl,       // décalage à gauche (<<)
+		shr        // décalage à droite arithmétique (>>)
 	} Operation;
 
 
@@ -63,7 +65,9 @@ class IRInstr {
 	IRInstr(BasicBlock* bb_, Operation op, Type t, vector<string> params);
 	
 	/** Actual code generation */
-	void gen_asm(ostream &o); /**< x86 assembly code generation for this IR instruction */
+	void gen_asm(ostream &o);
+	void gen_asm_x86(ostream &o);
+	void gen_asm_arm64(ostream &o);
 	
  private:
 	BasicBlock* bb; /**< The BB this instruction belongs to, which provides a pointer to the CFG this instruction belong to */
@@ -103,7 +107,9 @@ Possible optimization:
 class BasicBlock {
  public:
 	BasicBlock(CFG* cfg, string entry_label);
-	void gen_asm(ostream &o); /**< x86 assembly code generation for this basic block (very simple) */
+	void gen_asm(ostream &o);
+	void gen_asm_x86(ostream &o);
+	void gen_asm_arm64(ostream &o);
 
 	void add_IRInstr(IRInstr::Operation op, Type t, vector<string> params);
 
@@ -137,14 +143,23 @@ class CFG {
 	DefFonction* ast; /**< The AST this CFG comes from */
 	string funcName; /**< The name of the function */
 	Type returnType; /**< The return type of this function (INT or DOUBLE) */
+	string target; /**< "x86" or "arm64" */
 	
 	void add_bb(BasicBlock* bb); 
 
-	// x86 code generation: could be encapsulated in a processor class in a retargetable compiler
+	// code generation (dispatches to x86 or arm64 based on target)
 	void gen_asm(ostream& o);
-	string IR_reg_to_asm(string reg); /**< helper method: inputs a IR reg or input variable, returns e.g. "-24(%rbp)" for the proper value of 24 */
+	string IR_reg_to_asm(string reg); /**< x86: inputs a IR reg, returns e.g. "-24(%rbp)" */
 	void gen_asm_prologue(ostream& o);
 	void gen_asm_epilogue(ostream& o);
+
+	// ARM64 helpers
+	void arm64_load_w(ostream& o, string wreg, string ir_var);
+	void arm64_store_w(ostream& o, string wreg, string ir_var);
+	void arm64_load_x(ostream& o, string xreg, string ir_var);
+	void arm64_store_x(ostream& o, string xreg, string ir_var);
+	void gen_asm_prologue_arm64(ostream& o);
+	void gen_asm_epilogue_arm64(ostream& o);
 
 	// symbol table methods
 	void add_to_symbol_table(string name, Type t);
@@ -162,9 +177,11 @@ class CFG {
 	// Double constants stored in .rodata section (label → hex representation)
 	vector<pair<string, double>> doubleConstants;
 
- protected:
+ public: // accessible par IRInstr pour la génération ARM64
 	map <string, Type> SymbolType; /**< part of the symbol table  */
 	map <string, int> SymbolIndex; /**< part of the symbol table  */
+
+ protected:
 	map <string, Type> ArrayElementType; /**< element type for arrays */
 	map <string, int> ArraySize; /**< number of elements for arrays */
 	int nextFreeSymbolIndex; /**< to allocate new symbols in the symbol table */

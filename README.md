@@ -435,42 +435,88 @@ Cette modification *zéro overhead* permet au compilateur de compiler silencieus
 
 ---
 
-## Grammaire complète
+### Nouvelles fonctionnalités facultatives
 
-```antlr
-grammar ifcc;
+#### Boucle `for`
 
-prog : function_def+ EOF ;
-function_def : type VAR '(' parameters? ')' '{' statement* '}' ;
-parameters : type VAR (',' type VAR)* ;
-type : 'int' | 'double' ;
+**Objectif** : Supporter la boucle `for` classique du C.
 
-statement : declaration ';' | affectation ';' | expr ';'
-          | return_stmt | block | ifStmt | whileStmt ;
+**Implémentation** :
+- **Grammaire** : `forStmt : 'for' '(' (declaration | expr)? ';' expr? ';' expr? ')' statement ;`
+- Le `for` est essentiellement un sucre syntaxique décomposé en 4 BasicBlocks : init → condition → body → update → condition.
+- Le bloc `for` ouvre et ferme un scope (pour les variables déclarées dans l'init, comme `for (int i = 0; ...)`).
+- L'expression `update` (3ème partie) est évaluée dans un bloc séparé pour permettre `continue` de sauter vers l'update plutôt que la condition.
 
-block : '{' statement* '}' ;
-ifStmt : 'if' '(' expr ')' statement ('else' statement)? ;
-whileStmt : 'while' '(' expr ')' statement ;
-declaration : type VAR '=' expr ;
-affectation : lvalue '=' expr ;
-lvalue : VAR ;
+**Exemple** : `for (int i = 0; i < 10; ++i) { sum += i; }`
 
-expr : '-' expr                                    # unaryMinusExpr
-     | expr ('*' | '/') expr                       # mulDivExpr
-     | expr ('+' | '-') expr                       # addSubExpr
-     | expr ('<' | '>' | '<=' | '>=') expr         # relExpr
-     | expr ('==' | '!=') expr                     # eqExpr
-     | VAR '(' (expr (',' expr)*)? ')'             # callExpr
-     | '(' expr ')'                                # parenExpr
-     | CONST_DOUBLE                                # constDoubleExpr
-     | CONST                                       # constExpr
-     | VAR                                         # varExpr
-     ;
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
 
-return_stmt : RETURN expr ';' ;
-CONST_DOUBLE : [0-9]+ '.' [0-9]* | '.' [0-9]+ ;
-CONST : [0-9]+ ;
-```
+---
+
+#### `break` et `continue`
+
+**Objectif** : Supporter les instructions de contrôle de boucle.
+
+**Implémentation** :
+- **Pile de contextes de boucle** (`loopStack`) dans `IRGenVisitor` : chaque boucle (`while`, `for`) empile un `LoopContext` contenant les pointeurs vers le bloc condition (pour `continue`) et le bloc de sortie (pour `break`).
+- `break` : saut vers `loopStack.back().bb_end`, création d'un bloc mort.
+- `continue` : saut vers `loopStack.back().bb_cond` (ou `bb_update` pour `for`).
+- **Analyse sémantique** : `SymbolTableVisitor` maintient un `loopDepth` et rejette `break`/`continue` en dehors d'une boucle.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
+
+---
+
+#### Opérateurs logiques paresseux `&&` et `||`
+
+**Objectif** : Supporter l'évaluation court-circuit (short-circuit evaluation).
+
+**Implémentation** :
+- `&&` : évalue le premier opérande. S'il est faux (0), le résultat est 0 sans évaluer le second opérande. Sinon, évalue le second et retourne `(second != 0) ? 1 : 0`.
+- `||` : évalue le premier opérande. S'il est vrai (non-0), le résultat est 1. Sinon, évalue le second.
+- Chaque opérateur crée 2 BasicBlocks : un pour évaluer le second opérande, un pour la suite.
+- Constant folding : `0 && x` → `0`, `1 || x` → `1` sans générer de code.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+#### Opérateurs d'affectation composée `+=`, `-=`, `*=`, `/=`, `%=`
+
+**Objectif** : Supporter les opérateurs d'affectation composée.
+
+**Implémentation** :
+- Chaque opérateur est une alternative séparée dans la grammaire (pour éviter l'explosion d'états DFA).
+- Un helper `emitCompoundAssign` factorise la logique : lire la valeur actuelle de la lvalue, appliquer l'opération, écrire le résultat.
+- Exemple : `x += 5` → `leaq x, addr; rmem addr → tmp; add tmp, 5 → result; wmem addr, result`.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+#### Opérateurs d'incrémentation `++` et décrémentation `--`
+
+**Objectif** : Supporter `++x` (pré-incrémentation, expression) et `x++` (post-incrémentation, statement).
+
+**Implémentation** :
+- `++x` et `--x` sont des expressions : ils retournent la nouvelle valeur.
+- `x++` et `x--` sont des statements (pour éviter l'explosion d'états DFA côté parser) : `postIncStmt : VAR '++' ';'`.
+- Mécanisme : `lea` pour obtenir l'adresse, `rmem` pour lire, `add`/`sub` 1, `wmem` pour écrire.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
+
+---
+
+#### Opérateurs de décalage `<<` et `>>`
+
+**Objectif** : Supporter les décalages bit-à-bit.
+
+**Implémentation** :
+- Nouvelles instructions IR : `shl` et `shr`.
+- Assembleur : `sall %cl, %eax` (shift left) et `sarl %cl, %eax` (shift right arithmétique).
+- Constant folding : deux constantes → calcul à la compilation.
+
+**Fichiers modifiés** : `ifcc.g4`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
 
 ---
 
@@ -486,6 +532,7 @@ CONST : [0-9]+ ;
 | `sub` | `movl + subl` | Soustraction int |
 | `mul` | `movl + imull` | Multiplication int |
 | `div_int` | `cltd + idivl` | Division entière signée |
+| `mod_int` | `cltd + idivl` | Modulo entier (résultat dans `%edx`) |
 | `add_double` | `movsd + addsd` | Addition double |
 | `sub_double` | `movsd + subsd` | Soustraction double |
 | `mul_double` | `movsd + mulsd` | Multiplication double |
@@ -498,10 +545,18 @@ CONST : [0-9]+ ;
 | `cmp_le` | `cmpl + setle` | Inférieur ou égal (`<=`) |
 | `cmp_gt` | `cmpl + setg` | Supérieur (`>`) |
 | `cmp_ge` | `cmpl + setge` | Supérieur ou égal (`>=`) |
+| `bit_and` | `andl` | AND bit-à-bit |
+| `bit_xor` | `xorl` | XOR bit-à-bit |
+| `bit_or` | `orl` | OR bit-à-bit |
+| `shl` | `sall %cl` | Décalage à gauche (`<<`) |
+| `shr` | `sarl %cl` | Décalage à droite arithmétique (`>>`) |
+| `logical_not` | `cmpl $0 + sete` | NOT logique (`!`) |
 | `call` | `movl args → regs; call func` | Appel de fonction (ABI System V) |
-| `lea` | `leaq src(%rbp), %rax; movq %rax, dest` | Charge l'adresse effective d'une variable |
-| `wmem` | `movq addr, %rax; movl val, (%rax)` | Écrit un int à l'adresse calculée |
-| `wmem_double` | `movq addr, %rax; movsd val, (%rax)` | Écrit un double à l'adresse calculée |
+| `lea` | `leaq src(%rbp), %rax` | Charge l'adresse effective |
+| `rmem` | `movq addr; movl (%rax)` | Lit un int depuis une adresse |
+| `wmem` | `movq addr; movl val, (%rax)` | Écrit un int à l'adresse |
+| `wmem_double` | `movq addr; movsd val, (%rax)` | Écrit un double à l'adresse |
+| `add_addr` | `addq` | Arithmétique d'adresse (tableaux) |
 
 ---
 
@@ -521,20 +576,30 @@ gcc output.s -o output
 echo $?  # affiche le code de retour
 
 # Lancer la suite de tests
-cd ../testfiles
-./run_tests.sh
+cd ..
+python3 ifcc-test.py testfiles/
 ```
 
 ---
 
 ## Tests
 
-La suite de tests (`testfiles/run_tests.sh`) couvre **30 cas** :
+La suite de tests (`ifcc-test.py`) couvre **73 cas** :
 - Retour de constantes et variables
-- Déclarations et affectations
-- Arithmétique complète (+, -, *, parenthèses, moins unaire, priorités)
-- Appels de fonctions (putchar, fonctions utilisateur)
-- Fonctions multiples avec paramètres
-- Récursion (factorielle récursive)
-- Boucle while (factorielle itérative)
+- Déclarations et affectations (simples, chaînes, swap)
+- Arithmétique complète (+, -, *, /, %, parenthèses, moins unaire, priorités)
+- Opérations bit-à-bit (&, ^, |, <<, >>)
+- Opérateurs logiques (!, &&, ||)
+- Comparaisons (<, >, <=, >=, ==, !=)
+- Appels de fonctions (putchar, fonctions utilisateur, >6 args)
+- Fonctions multiples avec paramètres, récursion
+- Boucles while et for (avec break/continue)
+- Types double avec conversions implicites
+- Tableaux unidimensionnels
+- Portées de variables et shadowing
+- Opérateurs composés (+=, -=, *=, /=, %=)
+- Incrémentation/décrémentation (++, --)
+- Constantes caractère ('a', '\n')
+- Cas d'erreur (syntaxe invalide, main manquant)
+- Return multiples
 - Return multiples (classify, abs)

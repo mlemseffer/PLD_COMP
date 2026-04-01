@@ -56,6 +56,24 @@ public:
     virtual antlrcpp::Any visitRelExpr(ifccParser::RelExprContext *ctx) override;
     virtual antlrcpp::Any visitEqExpr(ifccParser::EqExprContext *ctx) override;
     virtual antlrcpp::Any visitWhileStmt(ifccParser::WhileStmtContext *ctx) override;
+    virtual antlrcpp::Any visitForStmt(ifccParser::ForStmtContext *ctx) override;
+    virtual antlrcpp::Any visitBreakStmt(ifccParser::BreakStmtContext *ctx) override;
+    virtual antlrcpp::Any visitContinueStmt(ifccParser::ContinueStmtContext *ctx) override;
+    virtual antlrcpp::Any visitShiftExpr(ifccParser::ShiftExprContext *ctx) override;
+    virtual antlrcpp::Any visitLogicalAndExpr(ifccParser::LogicalAndExprContext *ctx) override;
+    virtual antlrcpp::Any visitLogicalOrExpr(ifccParser::LogicalOrExprContext *ctx) override;
+    virtual antlrcpp::Any visitPreIncExpr(ifccParser::PreIncExprContext *ctx);
+    virtual antlrcpp::Any visitPreDecExpr(ifccParser::PreDecExprContext *ctx);
+    virtual antlrcpp::Any visitPostIncStmt(ifccParser::PostIncStmtContext *ctx);
+    virtual antlrcpp::Any visitPostDecStmt(ifccParser::PostDecStmtContext *ctx);
+    virtual antlrcpp::Any visitPlusAssignExpr(ifccParser::PlusAssignExprContext *ctx);
+    virtual antlrcpp::Any visitMinusAssignExpr(ifccParser::MinusAssignExprContext *ctx);
+    virtual antlrcpp::Any visitMulAssignExpr(ifccParser::MulAssignExprContext *ctx);
+    virtual antlrcpp::Any visitDivAssignExpr(ifccParser::DivAssignExprContext *ctx);
+    virtual antlrcpp::Any visitModAssignExpr(ifccParser::ModAssignExprContext *ctx);
+    virtual antlrcpp::Any visitReturn_void_stmt(ifccParser::Return_void_stmtContext *ctx);
+    virtual antlrcpp::Any visitDoWhileStmt(ifccParser::DoWhileStmtContext *ctx);
+    virtual antlrcpp::Any visitTernaryExpr(ifccParser::TernaryExprContext *ctx);
 
 private:
     std::vector<CFG*> cfgs;
@@ -96,6 +114,16 @@ private:
     map<string, int> constMap;
     set<string> collectAssignedVars(antlr4::tree::ParseTree* tree);
 
+    // Helper pour les opérateurs d'affectation composée (+=, -=, etc.)
+    ExprValue emitCompoundAssign(ifccParser::LvalueContext* lvalueCtx, ifccParser::ExprContext* exprCtx, string op);
+
     // Compteur global pour les labels de constantes double dans la section .rodata
     int nextDoubleConstIndex = 0;
+
+    // Pile de contextes de boucle pour break/continue
+    struct LoopContext {
+        BasicBlock* bb_cond;  // bloc condition (pour continue)
+        BasicBlock* bb_end;   // bloc après la boucle (pour break)
+    };
+    vector<LoopContext> loopStack;
 };
