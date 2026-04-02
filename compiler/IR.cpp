@@ -1,6 +1,7 @@
 #include "IR.h"
 #include <map>
 #include <cstring>
+#include <cstdint>
 
 using namespace std;
 
@@ -742,6 +743,15 @@ void CFG::gen_asm_prologue(ostream &o) {
     // Réserver de l'espace sur la pile (arrondi à un multiple de 16)
     int stackSize = ((nextFreeSymbolIndex + 15) & ~15);
     o << "    subq $" << stackSize << ", %rsp\n";
+    // Initialize !retval to 0 (C99: reaching end of main without return == return 0)
+    if (SymbolIndex.find("!retval") != SymbolIndex.end()) {
+        if (returnType == DOUBLE) {
+            o << "    xorpd %xmm7, %xmm7\n";
+            o << "    movsd %xmm7, " << IR_reg_to_asm("!retval") << "\n";
+        } else {
+            o << "    movl $0, " << IR_reg_to_asm("!retval") << "\n";
+        }
+    }
 }
 
 void CFG::gen_asm_epilogue(ostream &o) {
