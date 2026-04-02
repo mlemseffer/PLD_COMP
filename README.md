@@ -560,6 +560,117 @@ Cette modification *zéro overhead* permet au compilateur de compiler silencieus
 
 ---
 
+#### `switch/case`
+
+**Objectif** : Supporter la structure `switch/case` du C.
+
+**Implémentation** :
+- **Grammaire** : `switchStmt : 'switch' '(' expr ')' '{' switchCase* defaultCase? '}'`
+- Chaque `case` génère un BasicBlock avec une comparaison `cmp_eq` entre la valeur du switch et la constante du case.
+- `break` à la fin d'un case saute au bloc de sortie via le `loopStack` (partagé avec les boucles).
+- Le `default` est un bloc de repli si aucun case ne correspond.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`
+
+---
+
+#### Boucle `do-while`
+
+**Objectif** : Supporter la boucle `do { ... } while (cond)`.
+
+**Implémentation** :
+- **Grammaire** : `doWhileStmt : 'do' statement 'while' '(' expr ')' ';'`
+- Différence avec `while` : le corps est exécuté **avant** le premier test de la condition.
+- Structure en BasicBlocks : `bb_body` → `bb_cond` → (`bb_body` si vrai | `bb_end` si faux).
+- `break`/`continue` fonctionnent via le même `loopStack`.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+#### Opérateur ternaire `? :`
+
+**Objectif** : Supporter l'expression conditionnelle `cond ? val_vrai : val_faux`.
+
+**Implémentation** :
+- **Grammaire** : `ternaryExpr : expr '?' expr ':' expr` avec associativité droite.
+- Crée 3 BasicBlocks : évaluation de la condition → branche vraie → branche fausse → suite.
+- Le résultat est écrit dans une variable temporaire commune aux deux branches.
+- Constant folding : si la condition est constante, seule la branche correspondante est générée.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+### Reciblage ARM64
+
+**Objectif** : Générer de l'assembleur ARM64 (Apple Silicon / Linux ARM) depuis le même IR, sans modifier le front-end.
+
+**Principe** : à l'étape de génération d'assembleur (`gen_asm()`), chaque `CFG` connaît sa cible (`target = "x86"` ou `"arm64"`). Chaque instruction IR dispatchs vers sa méthode de génération correspondante.
+
+**Différences majeures ARM64 vs x86-64** :
+
+| Aspect | x86-64 | ARM64 |
+|--------|--------|-------|
+| Frame pointer | `%rbp` | `x29` |
+| Link register | (dans la pile) | `x30` |
+| Prologue | `pushq %rbp; movq %rsp, %rbp` | `stp x29, x30, [sp, #-16]!; mov x29, sp` |
+| Épilogue | `leave; ret` | `ldp x29, x30, [sp], #16; ret` |
+| Chargement variable | `movl -8(%rbp), %eax` | `ldur w0, [x29, #-8]` |
+| Écriture variable | `movl %eax, -8(%rbp)` | `stur w0, [x29, #-8]` |
+| Appel de fonction | `call foo` | `bl foo` |
+| Arguments | `%edi`, `%esi`, ... | `w0`, `w1`, ... |
+| Retour (int) | `%eax` | `w0` |
+
+**Gestion des grands offsets** : `ldur`/`stur` ARM64 n'acceptent pas d'offsets > 255. Un helper `arm64_load_w` utilise un registre temporaire `x11` dans ce cas :
+```asm
+sub x11, x29, #320    ; offset > 255
+ldr w8, [x11]
+```
+
+**Fichiers modifiés** : `IR.h`, `IR.cpp`, `IRGenVisitor.cpp`, `main.cpp`
+
+---
+
+### Corrections de robustesse
+
+#### Fix `5_no_return` — initialisation de `!retval`
+
+**Problème** : une fonction `int main() { 42; }` (sans `return`) retournait 255 au lieu de 0. La variable `!retval` n'était jamais écrite, sa valeur sur la pile était indéterminée.
+
+**Fix** : dans `gen_asm_prologue`, `!retval` est maintenant initialisé à 0 (`movl $0, -4(%rbp)`) dès l'entrée dans la fonction. Conforme à la norme C99 : atteindre la fin de `main` sans `return` équivaut à `return 0`.
+
+#### Fix `#include <cstdint>` dans `IR.cpp`
+
+**Problème** : `uint64_t` utilisé pour la représentation IEEE 754 des constantes double n'était pas déclaré sur certains compilateurs.
+
+**Fix** : ajout de `#include <cstdint>` dans `IR.cpp`.
+
+---
+
+### Programme de démonstration — `game.c`
+
+Un jeu de devinette de nombre compilable avec `ifcc`, conçu pour la démonstration en soutenance.
+
+```bash
+compiler/ifcc testfiles/game.c > game.s
+gcc game.s -o game
+printf '10\n80\n42\n' | ./game
+```
+
+Sortie :
+```
+=== Devinez (1-100) ===
+> Trop petit !
+> Trop grand !
+> Bravo ! Trouve en 3 essais.
+```
+
+Le jeu illustre en un seul programme : fonctions, récursion, boucle `while`, `&&` paresseux, `if/else`, arithmétique entière, convention d'appel ABI.
+Voir `testfiles/GAME_README.md` pour le walkthrough assembleur complet.
+
+---
+
 ## Compilation et exécution
 
 ```bash
@@ -584,7 +695,7 @@ python3 ifcc-test.py testfiles/
 
 ## Tests
 
-La suite de tests (`ifcc-test.py`) couvre **73 cas** :
+La suite de tests (`ifcc-test.py`) couvre **75 cas** (75/75 passent) :
 - Retour de constantes et variables
 - Déclarations et affectations (simples, chaînes, swap)
 - Arithmétique complète (+, -, *, /, %, parenthèses, moins unaire, priorités)
@@ -600,6 +711,10 @@ La suite de tests (`ifcc-test.py`) couvre **73 cas** :
 - Opérateurs composés (+=, -=, *=, /=, %=)
 - Incrémentation/décrémentation (++, --)
 - Constantes caractère ('a', '\n')
-- Cas d'erreur (syntaxe invalide, main manquant)
-- Return multiples
+- Boucles `do-while`
+- `switch/case` avec `break`
+- Opérateur ternaire `? :`
+- `break` et `continue` imbriqués
+- Cas d'erreur (syntaxe invalide, main manquant, no-return)
 - Return multiples (classify, abs)
+- Programme de démonstration complet (`game.c`)
