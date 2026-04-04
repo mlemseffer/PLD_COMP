@@ -2,7 +2,7 @@
 int binary_search(int target) {
     int a[10];
     /* Fill with sorted values: 0, 10, 20, ..., 90 */
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 10; ++i) {
         a[i] = i * 10;
     }
     int lo = 0;

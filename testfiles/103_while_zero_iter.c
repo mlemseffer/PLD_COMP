@@ -1,12 +1,16 @@
-/* while with condition false from start: body never executes */
+/* while that executes 0 times because condition is false at runtime */
+int add(int a, int b) {
+    return a + b;
+}
+
 int main() {
-    int x = 99;
-    while (0) {
-        x = 0; /* never reached */
+    /* Both values come from function calls, so no constant folding */
+    int small = add(3, 4);   /* 7 */
+    int big = add(50, 50);   /* 100 */
+    int count = 0;
+    while (small > big) {    /* 7 > 100 → false, never executes */
+        count = count + 1;
     }
-    int y = 42;
-    while (y > 100) {
-        y = 0; /* never reached */
-    }
-    return x + y; /* 99 + 42 = 141, but 141 mod 256 = 141 */
+    /* count stays 0, small stays 7, big stays 100 */
+    return small + count; /* 7 + 0 = 7 */
 }

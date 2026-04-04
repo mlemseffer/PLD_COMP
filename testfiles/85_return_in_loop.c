@@ -12,10 +12,10 @@ int find_first_even(int start, int end) {
 
 int find_in_array(int target) {
     int a[8];
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 8; ++i) {
         a[i] = i * i;  /* 0, 1, 4, 9, 16, 25, 36, 49 */
     }
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 8; ++i) {
         if (a[i] == target) {
             return i;  /* return inside for loop */
         }

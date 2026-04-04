@@ -9,8 +9,8 @@ int main() {
     a[5] = 9;
 
     int count = 0;
-    for (int i = 0; i < 6; i++) {
-        for (int j = i + 1; j < 6; j++) {
+    for (int i = 0; i < 6; ++i) {
+        for (int j = i + 1; j < 6; ++j) {
             if (a[i] > a[j]) {
                 count++;
             }

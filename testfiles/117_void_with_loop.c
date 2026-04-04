@@ -1,6 +1,6 @@
 /* void function with a loop printing chars */
 void print_stars(int n) {
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; ++i) {
         putchar('*');
     }
     putchar('\n');

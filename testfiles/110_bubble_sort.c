@@ -9,8 +9,8 @@ int main() {
     a[5] = 11;
 
     /* Bubble sort */
-    for (int i = 0; i < 5; i++) {
-        for (int j = 0; j < 5 - i; j++) {
+    for (int i = 0; i < 5; ++i) {
+        for (int j = 0; j < 5 - i; ++j) {
             if (a[j] > a[j + 1]) {
                 int tmp = a[j];
                 a[j] = a[j + 1];
