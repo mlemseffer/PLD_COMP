@@ -1,0 +1,12 @@
+/* Error: double definition of function */
+int foo() {
+    return 1;
+}
+
+int foo() {
+    return 2;
+}
+
+int main() {
+    return foo();
+}

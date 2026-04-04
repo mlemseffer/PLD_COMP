@@ -17,6 +17,7 @@ ifcc-test-output/
 # Local configuration
 compiler/config.mk
 localconfig.txt
+commandes.txt
 
 # Course materials and poly
 Cours/
