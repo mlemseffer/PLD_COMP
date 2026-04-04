@@ -1,12 +1,12 @@
-/* pre-increment/decrement on array elements (lvalue array + ++/--) */
+/* pre-inc sur elts tableau */
 int main() {
     int a[4];
     a[0] = 10;
     a[1] = 20;
     a[2] = 30;
     a[3] = 40;
-    /* pre-increment: ++a[i] not supported (only ++VAR in grammar) */
-    /* Use compound assign instead to test array lvalue compound ops */
+    /* pre-inc sur VAR uniquement */
+    /* utiliser affectation composee */
     a[0] += 1; /* 11 */
     a[1] -= 1; /* 19 */
     a[2] *= 2; /* 60 */

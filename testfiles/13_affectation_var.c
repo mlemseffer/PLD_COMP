@@ -1,4 +1,4 @@
-/* Assign a variable from another variable */
+/* affectation d'une variable a une autre */
 int main() {
     int a = 55;
     int b = 0;

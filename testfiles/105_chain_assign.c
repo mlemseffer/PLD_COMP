@@ -1,4 +1,4 @@
-/* chain assignment: a = b = c = value */
+/* affectation chainee */
 int main() {
     int a;
     int b;

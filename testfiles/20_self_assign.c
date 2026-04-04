@@ -1,4 +1,4 @@
-/* Self-assignment: a = a */
+/* auto-affectation */
 int main() {
     int a = 77;
     a = a;

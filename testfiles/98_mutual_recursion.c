@@ -1,5 +1,5 @@
-/* Mutual recursion: is_even and is_odd */
-/* Note: compiler registers all functions in first pass so order doesn't matter */
+/* recursion croisee */
+/* les fonctions sont enregistrees en passe 1 */
 int is_odd(int n) {
     if (n == 0) {
         return 0;

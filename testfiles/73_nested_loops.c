@@ -1,4 +1,4 @@
-/* Nested loops: count pairs (i,j) where i+j == 5, i in [0,5), j in [0,5) */
+/* boucles imbriquees */
 int main() {
     int count = 0;
     int i = 0;
@@ -7,7 +7,7 @@ int main() {
         while (j < 5) {
             if (i + j == 5) {
                 count++;
-                break; /* break inner loop only */
+                break; /* break boucle interne seulement */
             }
             j++;
         }

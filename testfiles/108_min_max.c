@@ -1,4 +1,4 @@
-/* Min/max functions + array search */
+/* min/max */
 int max3(int a, int b, int c) {
     int m = a;
     if (b > m) {

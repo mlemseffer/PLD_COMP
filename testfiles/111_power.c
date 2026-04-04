@@ -1,4 +1,4 @@
-/* Power function: recursive and iterative */
+/* puissance */
 int pow_iter(int base, int exp) {
     int result = 1;
     while (exp > 0) {

@@ -1,4 +1,4 @@
-/* Sum of digits of a number */
+/* somme de chiffres */
 int sum_digits(int n) {
     int s = 0;
     while (n > 0) {

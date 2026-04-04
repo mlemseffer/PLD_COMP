@@ -1,4 +1,4 @@
-/* Counting inversions in array (nested loops, conditionals) */
+/* comptage d'inversions */
 int main() {
     int a[6];
     a[0] = 3;

@@ -1,4 +1,4 @@
-/* continue inside for loop: skip multiples of 3 */
+/* continue dans for */
 int main() {
     int total = 0;
     for (int i = 1; i <= 20; ++i) {
@@ -7,6 +7,6 @@ int main() {
         }
         total += i;
     }
-    /* sum 1..20 = 210, minus (3+6+9+12+15+18) = 63 → 147 */
+    /* somme 1..20 = 210, minus (3+6+9+12+15+18) = 63 → 147 */
     return total;
 }

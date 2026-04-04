@@ -1,4 +1,4 @@
-/* Addition simple: 2 + 3 = 5 */
+/* addition */
 int main() {
     return 2 + 3;
 }

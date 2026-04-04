@@ -3,10 +3,10 @@ int main() {
     int res = 0;
     
     {
-        int a = 20; /* shadows outer a */
+        int a = 20; /* shadow a externe */
         res = res + a; /* 20 */
         {
-            int a = 30; /* shadows inner a */
+            int a = 30; /* shadow a interne */
             res = res + a; /* 50 */
         }
         res = res + a; /* 70 */

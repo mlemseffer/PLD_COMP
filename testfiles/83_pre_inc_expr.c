@@ -1,4 +1,4 @@
-/* Pre-increment used directly in expressions */
+/* pre-incrementation utilisee */
 int main() {
     int a = 5;
     int b = ++a + ++a;  /* a becomes 6, then 7; b = 6+7 = 13 */

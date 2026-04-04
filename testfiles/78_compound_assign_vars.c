@@ -1,4 +1,4 @@
-/* Compound assign operators with variable expressions, not just constants */
+/* affectation composee avec variables */
 int main() {
     int x = 100;
     int y = 7;

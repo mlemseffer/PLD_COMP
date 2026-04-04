@@ -1,4 +1,4 @@
-/* Error: variable used before declaration */
+/* erreur: usage var non declaree */
 int main() {
     x = 5;
     int x;

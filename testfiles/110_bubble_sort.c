@@ -1,4 +1,4 @@
-/* Bubble sort on an array */
+/* tri a bulles */
 int main() {
     int a[6];
     a[0] = 64;
@@ -8,7 +8,7 @@ int main() {
     a[4] = 22;
     a[5] = 11;
 
-    /* Bubble sort */
+    /* tri a bulles */
     for (int i = 0; i < 5; ++i) {
         for (int j = 0; j < 5 - i; ++j) {
             if (a[j] > a[j + 1]) {
@@ -19,6 +19,6 @@ int main() {
         }
     }
     /* sorted: 11, 12, 22, 25, 34, 64 */
-    /* check: a[0]=11, a[5]=64 */
+    /* verif: a[0]=11, a[5]=64 */
     return a[0] + a[5]; /* 11 + 64 = 75 */
 }

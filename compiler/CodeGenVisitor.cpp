@@ -48,7 +48,7 @@ antlrcpp::Any CodeGenVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx)
 
 antlrcpp::Any CodeGenVisitor::visitDeclVarUninit(ifccParser::DeclVarUninitContext *ctx)
 {
-    // No assigned value, just reserve the space (already done by symbol table size calculation).
+    // Espace réservé, pas de valeur initiale
     return 0;
 }
 
@@ -68,7 +68,7 @@ antlrcpp::Any CodeGenVisitor::visitAssignExpr(ifccParser::AssignExprContext *ctx
     this->visit(ctx->expr());
 
     std::cout << "    movl %eax, -" << index << "(%rbp)\n";
-    // %eax still contains the assigned value (for chaining)
+    // %eax contient encore la valeur affectée (pour les chaînes d'affectation)
 
     return 0;
 }
@@ -131,7 +131,7 @@ antlrcpp::Any CodeGenVisitor::visitMulDivModExpr(ifccParser::MulDivModExprContex
         std::cout << "    movl %ebx, %eax\n";
         std::cout << "    cltd\n";
         std::cout << "    idivl %ecx\n";
-    } else { // %
+    } else { // modulo
         std::cout << "    movl %eax, %ecx\n";
         std::cout << "    movl %ebx, %eax\n";
         std::cout << "    cltd\n";

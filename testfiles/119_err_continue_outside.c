@@ -1,4 +1,4 @@
-/* Error: continue outside of any loop */
+/* erreur: continue hors boucle */
 int main() {
     continue;
     return 0;

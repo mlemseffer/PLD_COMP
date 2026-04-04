@@ -1,4 +1,4 @@
-/* Overwrite a variable multiple times */
+/* ecrasements */
 int main() {
     int x = 1;
     x = 2;

@@ -1,5 +1,4 @@
-/* Uninitialized variables should at least be declared
-   (compiler should accept declVarUninit grammar rule) */
+/* variables non-init */
 int main() {
     int x;
     int y;

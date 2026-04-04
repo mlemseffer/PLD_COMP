@@ -1,4 +1,4 @@
-/* void function with a loop printing chars */
+/* fonction void */
 void print_stars(int n) {
     for (int i = 0; i < n; ++i) {
         putchar('*');
@@ -9,14 +9,14 @@ void print_stars(int n) {
 void print_range(int lo, int hi) {
     int i = lo;
     while (i <= hi) {
-        putchar('0' + i); /* prints digit */
+        putchar('0' + i); /* affiche digit */
         i++;
     }
     putchar('\n');
 }
 
 int main() {
-    print_stars(3);      /* prints "***\n" */
-    print_range(1, 5);   /* prints "12345\n" */
+    print_stars(3);      /* affiche "***\n" */
+    print_range(1, 5);   /* affiche "12345\n" */
     return 0;
 }

@@ -1,4 +1,4 @@
-/* Complex boolean expressions combining &&, ||, !, comparisons */
+/* expressions booleennes complexes */
 int between(int x, int lo, int hi) {
     return x >= lo && x <= hi;
 }

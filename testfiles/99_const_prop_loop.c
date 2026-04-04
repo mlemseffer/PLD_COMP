@@ -1,9 +1,9 @@
-/* Complex constant propagation: cascaded through if/while */
+/* propagation de constantes complexe */
 int main() {
     int a = 3;
     int b = a + 2;  /* b = 5 (propagated from a=3) */
     int c = b * b;  /* c = 25 (propagated) */
-    /* After while: x is invalidated because modified inside */
+    /* x invalidee car modifiee dans la boucle */
     int x = 10;
     int i = 0;
     while (i < 3) {

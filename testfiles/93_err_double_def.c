@@ -1,4 +1,4 @@
-/* Error: double definition of function */
+/* erreur: double definition */
 int foo() {
     return 1;
 }

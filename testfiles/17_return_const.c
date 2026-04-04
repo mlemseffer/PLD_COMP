@@ -1,4 +1,4 @@
-/* No variables, just return a constant */
+/* juste retour constante */
 int main() {
     return 100;
 }

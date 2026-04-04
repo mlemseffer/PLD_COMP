@@ -1,4 +1,4 @@
-/* Tests if without else, and else-if chains */
+/* chainage if/else */
 int grade(int score) {
     if (score >= 90) {
         return 4; /* A */

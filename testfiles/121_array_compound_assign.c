@@ -1,4 +1,4 @@
-/* Compound assign operators on array elements */
+/* affectation composee sur tableau */
 int main() {
     int a[5];
     for (int i = 0; i < 5; ++i) {
@@ -10,9 +10,9 @@ int main() {
     a[3] /= 5;   /* 6 */
     a[4] %= 7;   /* 5 */
     /* sum: 5+7+40+6+5 = 63 */
-    int sum = 0;
+    int somme = 0;
     for (int i = 0; i < 5; ++i) {
-        sum += a[i];
+        somme += a[i];
     }
     return sum;
 }

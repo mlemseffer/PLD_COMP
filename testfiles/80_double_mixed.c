@@ -1,8 +1,8 @@
-/* Mixed int/double comparisons and arithmetic */
+/* arithmetique int/double */
 int main() {
     double a = 5.5;
     int b = 3;
-    /* int promoted to double for comparison */
+    /* int promu en double pour cmp */
     int r1 = a > b;   /* 5.5 > 3.0 -> 1 */
     int r2 = a < b;   /* 5.5 < 3.0 -> 0 */
     double c = a + b; /* 5.5 + 3.0 = 8.5 */

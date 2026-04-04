@@ -1,6 +1,6 @@
-/* Shift operators used to implement powers of 2 and bit checks */
+/* shifts */
 int is_power_of_2(int n) {
-    /* A power of 2 has exactly one bit set: n & (n-1) == 0 */
+    /* une puissance de 2 n'a qu'un bit actif */
     if (n <= 0) {
         return 0;
     }

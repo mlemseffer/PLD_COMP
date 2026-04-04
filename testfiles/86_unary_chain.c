@@ -1,4 +1,4 @@
-/* Chained unary minus and logical not */
+/* chainage unaire et not */
 int main() {
     int x = 5;
     int a = -(-x);      /* 5 */

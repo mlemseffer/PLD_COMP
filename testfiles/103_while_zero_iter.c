@@ -1,10 +1,10 @@
-/* while that executes 0 times because condition is false at runtime */
+/* while non-exec */
 int add(int a, int b) {
     return a + b;
 }
 
 int main() {
-    /* Both values come from function calls, so no constant folding */
+    /* pas de constant folding, valeurs issues de fonctions */
     int small = add(3, 4);   /* 7 */
     int big = add(50, 50);   /* 100 */
     int count = 0;

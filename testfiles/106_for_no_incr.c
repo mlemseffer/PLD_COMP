@@ -1,10 +1,10 @@
-/* for loop with no increment (empty 3rd part) */
+/* for sans incrementation */
 int main() {
-    int sum = 0;
+    int somme = 0;
     for (int i = 0; i < 5; ) {
-        sum += i;
-        i += 2; /* increment inside the body */
+        somme += i;
+        i += 2; /* increment dans le corps */
     }
-    /* i takes values 0, 2, 4 → sum = 6 */
+    /* i takes values 0, 2, 4 → somme = 6 */
     return sum;
 }

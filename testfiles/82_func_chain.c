@@ -1,4 +1,4 @@
-/* Chain of function calls: f1 calls f2 calls f3 */
+/* chaine d'appels de fonctions */
 int triple(int x) {
     return x * 3;
 }

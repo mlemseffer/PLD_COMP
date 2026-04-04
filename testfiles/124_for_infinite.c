@@ -1,14 +1,14 @@
-/* for with infinite loop (no condition) and break */
+/* for infini */
 int main() {
     int i = 0;
-    int sum = 0;
+    int somme = 0;
     for ( ; ; ) {
         if (i >= 10) {
             break;
         }
-        sum += i;
+        somme += i;
         i++;
     }
-    /* sum 0..9 = 45 */
+    /* somme 0..9 = 45 */
     return sum;
 }

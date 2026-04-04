@@ -1,8 +1,8 @@
-/* Error: wrong number of arguments to function */
+/* erreur: mauvais nbr arguments */
 int add(int a, int b) {
     return a + b;
 }
 
 int main() {
-    return add(1, 2, 3); /* too many args */
+    return add(1, 2, 3); /* trop d'args */
 }

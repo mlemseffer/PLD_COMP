@@ -1,7 +1,8 @@
 #include "SymbolTableVisitor.h"
 #include <iostream>
 
-// ===== Scope management =====
+// ===== Gestion des portées =====
+
 
 void SymbolTableVisitor::pushScope() {
     scopeStack.push_back({});
@@ -35,10 +36,12 @@ int SymbolTableVisitor::lookupVariable(const std::string& name) const {
             return it->second;
         }
     }
-    return -1; // not found
+    return -1; // non trouvé
+
 }
 
-// ===== Visitors =====
+// ===== Visiteurs =====
+
 
 antlrcpp::Any SymbolTableVisitor::visitProg(ifccParser::ProgContext *ctx) {
     // Passe 1 : enregistrer toutes les fonctions définies (nom + nb params)
@@ -95,8 +98,9 @@ antlrcpp::Any SymbolTableVisitor::visitFunction_def(ifccParser::Function_defCont
 
     std::string funcName = ctx->VAR()->getText();
 
-    // Push the function-level scope
+    // Scope de la fonction
     pushScope();
+
 
     // Ajouter les paramètres à la table
     if (ctx->parameters()) {
@@ -160,7 +164,8 @@ antlrcpp::Any SymbolTableVisitor::visitDeclVar(ifccParser::DeclVarContext *ctx) 
     }
 
     int size = typeSize(declType);
-    // Check only the current (innermost) scope for redeclaration
+    // Vérifier la redéclaration dans le scope courant
+
     if (!scopeStack.empty() && scopeStack.back().find(varName) != scopeStack.back().end()) {
         std::cerr << "error: variable '" << varName << "' already declared in this scope" << std::endl;
         hasError = true;

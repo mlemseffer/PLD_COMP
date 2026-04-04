@@ -2,7 +2,7 @@ int main() {
     int a = 0;
     int b = 0;
     int c = 0;
-    a = b = c = 5; /* right-associative */
+    a = b = c = 5; /* associativite droite */
 
     int d = 10;
     int e = (d = 20) + 5; /* d gets 20, e gets 25 */

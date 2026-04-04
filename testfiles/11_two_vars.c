@@ -1,4 +1,4 @@
-/* Two variables, return second */
+/* deux variables */
 int main() {
     int a = 10;
     int b = 20;

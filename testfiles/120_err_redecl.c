@@ -1,6 +1,6 @@
-/* Error: variable declared twice in same scope */
+/* erreur: reclaration var */
 int main() {
     int x = 5;
-    int x = 10; /* redeclaration error */
+    int x = 10; /* ereur: redecl */
     return x;
 }

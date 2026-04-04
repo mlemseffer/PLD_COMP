@@ -1,4 +1,4 @@
-/* Error: break outside of any loop */
+/* erreur: break hors boucle */
 int main() {
     break;
     return 0;

@@ -1,4 +1,4 @@
-/* Affectation avec expression: c = a + b */
+/* affectation */
 int main() {
     int a = 10;
     int b = 20;

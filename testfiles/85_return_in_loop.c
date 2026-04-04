@@ -1,9 +1,9 @@
-/* return inside a loop (early exit) */
+/* return premature */
 int find_first_even(int start, int end) {
     int i = start;
     while (i <= end) {
         if (i % 2 == 0) {
-            return i;  /* return inside a while loop */
+            return i;  /* return dans while */
         }
         i++;
     }
@@ -17,7 +17,7 @@ int find_in_array(int target) {
     }
     for (int i = 0; i < 8; ++i) {
         if (a[i] == target) {
-            return i;  /* return inside for loop */
+            return i;  /* return dans for */
         }
     }
     return -1;
@@ -25,6 +25,6 @@ int find_in_array(int target) {
 
 int main() {
     int a = find_first_even(3, 10); /* 4 */
-    int b = find_in_array(25);      /* index 5 */
+    int b = find_in_array(25);      /* indice 5 */
     return a + b;                   /* 9 */
 }

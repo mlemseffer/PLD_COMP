@@ -1,7 +1,7 @@
-/* Binary search on a sorted array */
+/* recherche dichotomique */
 int binary_search(int target) {
     int a[10];
-    /* Fill with sorted values: 0, 10, 20, ..., 90 */
+    /* init tableau trie */
     for (int i = 0; i < 10; ++i) {
         a[i] = i * 10;
     }
@@ -17,13 +17,13 @@ int binary_search(int target) {
             hi = mid - 1;
         }
     }
-    return 99; /* sentinel: not found */
+    return 99; /* non trouve */
 }
 
 int main() {
-    int a = binary_search(30); /* index 3 */
-    int b = binary_search(70); /* index 7 */
-    int c = binary_search(0);  /* index 0 */
+    int a = binary_search(30); /* indice 3 */
+    int b = binary_search(70); /* indice 7 */
+    int c = binary_search(0);  /* indice 0 */
     return a + b + c; /* 3 + 7 + 0 = 10 */
 }
 

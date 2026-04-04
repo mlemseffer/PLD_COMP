@@ -1,4 +1,4 @@
-/* Fibonacci with for loop (iterative) */
+/* fibonacci iteratif */
 int fibo_iter(int n) {
     if (n <= 1) {
         return n;

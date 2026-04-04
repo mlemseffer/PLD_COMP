@@ -1,4 +1,4 @@
-/* Ternary operator used as function arguments and in complex expressions */
+/* ternaire dans expressions complexes */
 int max2(int a, int b) {
     return a > b ? a : b;
 }

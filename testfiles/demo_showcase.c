@@ -85,14 +85,14 @@ int min(int a, int b) {
 
 // ---- Feature: do-while, continue ----
 int sum_odd_digits(int n) {
-    int sum = 0;
+    int somme = 0;
     do {
         int digit = n % 10;
         n = n / 10;
         if (digit % 2 == 0) {
             continue;
         }
-        sum += digit;
+        somme += digit;
     } while (n > 0);
     return sum;
 }
@@ -117,9 +117,9 @@ int bubble_sort_sum(int size) {
     }
 
     // Verifier que le tableau est trie : retourner la somme
-    int sum = 0;
+    int somme = 0;
     for (int i = 0; i < size; ++i) {
-        sum += arr[i] * (i + 1);
+        somme += arr[i] * (i + 1);
     }
     return sum;
 }
@@ -230,7 +230,7 @@ int main() {
     check(m == 20, 5);
     if (m != 20) ok = 0;
 
-    // Test 6: do-while + continue (sum odd digits of 12345)
+    // Test 6: do-while + continue (somme odd digits of 12345)
     int sod = sum_odd_digits(12345);
     check(sod == 9, 6);
     if (sod != 9) ok = 0;

@@ -1,4 +1,4 @@
-/* Many variables to test stack space */
+/* multitude de variables */
 int main() {
     int a = 1;
     int b = 2;

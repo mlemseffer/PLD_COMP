@@ -1,4 +1,4 @@
-/* Chain of assignments a -> b -> c */
+/* chaine d'affectations */
 int main() {
     int a = 17;
     int b = 0;

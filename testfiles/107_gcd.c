@@ -1,4 +1,4 @@
-/* GCD using Euclidean algorithm (while loop + modulo) */
+/* PGCD algorithme d'Euclide */
 int gcd(int a, int b) {
     while (b != 0) {
         int tmp = b;

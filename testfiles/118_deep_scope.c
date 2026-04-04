@@ -1,4 +1,4 @@
-/* Deep variable scope: variables in nested blocks shadow outer ones */
+/* portee imbriquee */
 int main() {
     int x = 1;
     int total = 0;
