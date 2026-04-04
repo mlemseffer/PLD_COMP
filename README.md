@@ -435,234 +435,88 @@ Cette modification *zéro overhead* permet au compilateur de compiler silencieus
 
 ---
 
-### 4.22 — Opérateurs logiques paresseux `&&` et `||`
+### Nouvelles fonctionnalités facultatives
 
-**Objectif** : Implémenter les opérateurs logiques avec **évaluation court-circuit** (lazy evaluation) : le second opérande n'est évalué que si le résultat n'est pas déjà déterminé par le premier.
+#### Boucle `for`
 
-**Principe** :
-- `a && b` : si `a == 0`, résultat = 0 sans évaluer `b`. Sinon, résultat = `(b != 0)`.
-- `a || b` : si `a != 0`, résultat = 1 sans évaluer `b`. Sinon, résultat = `(b != 0)`.
+**Objectif** : Supporter la boucle `for` classique du C.
 
 **Implémentation** :
-- **Grammaire** (`ifcc.g4`) : ajout de `logicalAndExpr` et `logicalOrExpr` dans `expr`, entre `bitOrExpr` et `assignExpr`, respectant la précédence C (`&&` > `||`).
-- **Génération IR** (`IRGenVisitor.cpp`) — `visitLogicalAndExpr` / `visitLogicalOrExpr` :
-  1. Allouer `result` (variable de pile, persistante entre blocs).
-  2. Initialiser `result = 0` (`&&`) ou `result = 1` (`||`) dans le bloc courant.
-  3. Évaluer l'opérande gauche → `leftVar`.
-  4. Configurer le branchement court-circuit :
-     - `&&` : `exit_true → bb_eval_right`, `exit_false → bb_end`
-     - `||` : `exit_true → bb_end`, `exit_false → bb_eval_right`
-  5. Dans `bb_eval_right` : évaluer l'opérande droit, normaliser via `cmp_neq(right, 0)` → `result`.
-  6. Rejoindre `bb_end`.
+- **Grammaire** : `forStmt : 'for' '(' (declaration | expr)? ';' expr? ';' expr? ')' statement ;`
+- Le `for` est essentiellement un sucre syntaxique décomposé en 4 BasicBlocks : init → condition → body → update → condition.
+- Le bloc `for` ouvre et ferme un scope (pour les variables déclarées dans l'init, comme `for (int i = 0; ...)`).
+- L'expression `update` (3ème partie) est évaluée dans un bloc séparé pour permettre `continue` de sauter vers l'update plutôt que la condition.
 
-**Précédences respectées** :
-| Priorité | Opérateur |
-|----------|-----------|
-| Plus haute | `\|` (bitwise) |
-| | `&&` |
-| Plus basse | `\|\|` |
+**Exemple** : `for (int i = 0; i < 10; ++i) { sum += i; }`
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
+
+---
+
+#### `break` et `continue`
+
+**Objectif** : Supporter les instructions de contrôle de boucle.
+
+**Implémentation** :
+- **Pile de contextes de boucle** (`loopStack`) dans `IRGenVisitor` : chaque boucle (`while`, `for`) empile un `LoopContext` contenant les pointeurs vers le bloc condition (pour `continue`) et le bloc de sortie (pour `break`).
+- `break` : saut vers `loopStack.back().bb_end`, création d'un bloc mort.
+- `continue` : saut vers `loopStack.back().bb_cond` (ou `bb_update` pour `for`).
+- **Analyse sémantique** : `SymbolTableVisitor` maintient un `loopDepth` et rejette `break`/`continue` en dehors d'une boucle.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
+
+---
+
+#### Opérateurs logiques paresseux `&&` et `||`
+
+**Objectif** : Supporter l'évaluation court-circuit (short-circuit evaluation).
+
+**Implémentation** :
+- `&&` : évalue le premier opérande. S'il est faux (0), le résultat est 0 sans évaluer le second opérande. Sinon, évalue le second et retourne `(second != 0) ? 1 : 0`.
+- `||` : évalue le premier opérande. S'il est vrai (non-0), le résultat est 1. Sinon, évalue le second.
+- Chaque opérateur crée 2 BasicBlocks : un pour évaluer le second opérande, un pour la suite.
+- Constant folding : `0 && x` → `0`, `1 || x` → `1` sans générer de code.
 
 **Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
 
 ---
 
-### 4.23 — `break` et `continue`
+#### Opérateurs d'affectation composée `+=`, `-=`, `*=`, `/=`, `%=`
 
-**Objectif** : Supporter `break` (sortie immédiate d'une boucle ou d'un switch) et `continue` (passage à l'itération suivante d'une boucle).
+**Objectif** : Supporter les opérateurs d'affectation composée.
 
 **Implémentation** :
-- **Grammaire** : `breakStmt : 'break' ';' ;` et `continueStmt : 'continue' ';' ;` ajoutés comme alternatives de `statement`.
-- **Stack de contexte de boucle** (`IRGenVisitor.h`) : un `vector<LoopContext> loopStack` est maintenu. Chaque `LoopContext` contient :
-  - `break_target` : le BasicBlock vers lequel sauter lors d'un `break`.
-  - `continue_target` : le BasicBlock vers lequel sauter lors d'un `continue` (nul pour switch).
-- **Mise à jour de `visitWhileStmt`** : push d'un `LoopContext{bb_end, bb_cond}` avant de visiter le corps, pop après.
-- **`visitBreakStmt`** : `exit_true = loopStack.back().break_target`, puis création d'un bloc mort pour le code éventuellement présent après le `break`.
-- **`visitContinueStmt`** : `exit_true = loopStack.back().continue_target`, même création de bloc mort.
-- **Sémantique d'imbrication** : si un `while` est imbriqué dans un `switch`, son propre `LoopContext` est au sommet de la pile, et un `break` à l'intérieur sort bien du `while`, pas du `switch`.
+- Chaque opérateur est une alternative séparée dans la grammaire (pour éviter l'explosion d'états DFA).
+- Un helper `emitCompoundAssign` factorise la logique : lire la valeur actuelle de la lvalue, appliquer l'opération, écrire le résultat.
+- Exemple : `x += 5` → `leaq x, addr; rmem addr → tmp; add tmp, 5 → result; wmem addr, result`.
 
 **Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
 
 ---
 
-### 4.24 — `switch...case`
+#### Opérateurs d'incrémentation `++` et décrémentation `--`
 
-**Objectif** : Supporter la structure `switch(expr) { case N: ... default: ... }` avec gestion du fall-through et du `break`.
-
-**Implémentation** :
-- **Grammaire** (`ifcc.g4`) :
-  ```antlr
-  switchStmt : 'switch' '(' expr ')' '{' switchCase* '}' ;
-  switchCase : 'case' CONST ':' statement*    # caseClause
-             | 'default' ':' statement*       # defaultClause
-             ;
-  ```
-- **Génération IR** (`IRGenVisitor.cpp`) — `visitSwitchStmt` :
-  1. Évaluer l'expression du switch → `switchVar`.
-  2. Créer un `bb_end` (sortie du switch) et des `bodyBlocks[i]` (un par `case`).
-  3. **Chaîne de comparaisons** : dans le bloc courant et des blocs `bb_check_i` successifs, émettre `cmp_eq(switchVar, case_i_val)` avec branchement conditionnel vers `bodyBlocks[i]` (match) ou `bb_check_{i+1}` (pas de match). Le dernier check pointe vers `bb_default` ou `bb_end`.
-  4. **Corps des cases** : visiter les statements de chaque case. Si le bloc courant n'est pas terminé (pas de `break`/`return`), connecter vers `bodyBlocks[i+1]` (**fall-through**).
-  5. Push d'un `LoopContext{bb_end, continue_outer}` pour que `break` sorte du switch.
-- **Ordre de génération** : checks d'abord, puis bodies dans l'ordre source, ce qui garantit que toutes les comparaisons sont des sauts en avant (forward jumps) dans l'assembleur.
-
-**Exemple testé** :
-```c
-switch (x) {
-    case 1: result = 10; break;
-    case 2: result = result + 20;   // fall-through
-    case 3: result = result + 30; break;
-    default: result = 99;
-}
-```
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-### 4.25 — Types `void` et `char`, constantes caractères
-
-**Objectif** : Enrichir le système de types pour supporter `void` (fonctions sans valeur de retour) et `char` (constantes caractères).
+**Objectif** : Supporter `++x` (pré-incrémentation, expression) et `x++` (post-incrémentation, statement).
 
 **Implémentation** :
-- **Grammaire** (`ifcc.g4`) : `type : 'int' | 'double' | 'void' | 'char'`. Nouveau token `CHAR_CONST : '\'' ( '\\' [nrt0\\'] | ~['\\\r\n] ) '\''` avec support des séquences d'échappement (`\n`, `\t`, `\r`, `\0`, `\\`, `\'`).
-- **Fonctions `void`** : une fonction déclarée `void` n'a pas besoin de `return` explicite. Le compilateur génère un épilogue sans valeur.
-- **Constantes caractères** : les littéraux comme `'A'`, `'\n'`, `'0'` sont traduits en leur valeur ASCII entière (ex: `'A'` → `65`).
+- `++x` et `--x` sont des expressions : ils retournent la nouvelle valeur.
+- `x++` et `x--` sont des statements (pour éviter l'explosion d'états DFA côté parser) : `postIncStmt : VAR '++' ';'`.
+- Mécanisme : `lea` pour obtenir l'adresse, `rmem` pour lire, `add`/`sub` 1, `wmem` pour écrire.
 
-**Exemples testés** :
-```c
-void print_A() { putchar('A'); putchar('\n'); }
-int main() { print_A(); return 0; }
-```
-```c
-int a = 'A'; /* 65 */
-int b = '\n'; /* 10 */
-```
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
 
 ---
 
-### 4.26 — Opérateur modulo `%` et division entière
+#### Opérateurs de décalage `<<` et `>>`
 
-**Objectif** : Supporter l'opérateur modulo `%` dans les expressions entières, aux côtés de `*` et `/`.
+**Objectif** : Supporter les décalages bit-à-bit.
 
 **Implémentation** :
-- **Grammaire** : `mulDivModExpr : expr ('*' | '/' | '%') expr`.
-- **Instruction IR** : réutilisation de `div_int` — l'instruction `idivl` produit à la fois le quotient (dans `%eax`) et le reste (dans `%edx`). Pour le modulo, le résultat est lu depuis `%edx` au lieu de `%eax`.
+- Nouvelles instructions IR : `shl` et `shr`.
+- Assembleur : `sall %cl, %eax` (shift left) et `sarl %cl, %eax` (shift right arithmétique).
+- Constant folding : deux constantes → calcul à la compilation.
 
-**Exemple testé** : `17 % 5 → 2`, `100 % 7 → 2` ✅
-
-**Fichiers modifiés** : `IR.h`, `IR.cpp`, `IRGenVisitor.cpp`
-
----
-
-### 4.27 — Affectation comme expression (`assignExpr`)
-
-**Objectif** : L'affectation `a = b` est une **expression** à part entière en C, qui retourne la valeur affectée. Cela permet les chaînes `a = b = c = 5` et les motifs `if ((x = f()) > 0)`.
-
-**Implémentation** :
-- **Grammaire** : l'affectation est intégrée dans la règle `expr` avec associativité à droite : `<assoc=right> lvalue '=' expr`.
-- **Visiteur `visitAssignExpr`** : évalue la rvalue, effectue le `wmem` via lvalue, puis retourne un `ExprValue` contenant la valeur affectée. Cela permet aux expressions englobantes de la réutiliser.
-
-**Exemple testé** :
-```c
-a = b = c = 5;           // Chaîne d'affectation → a=b=c=5
-int e = (d = 20) + 5;    // d reçoit 20, e reçoit 25
-```
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.cpp`
-
----
-
-### 4.28 — Portées de blocs (block scoping)
-
-**Objectif** : Supporter le masquage (shadowing) des variables dans les blocs imbriqués, comme en C standard.
-
-**Implémentation** :
-- Chaque bloc `{ ... }` crée un **scope** local. Une variable déclarée dans un bloc interne masque une variable de même nom dans un bloc englobant.
-- À la sortie du bloc, les variables locales redeviennent invisibles et les variables externes reprennent leur visibilité.
-
-**Exemple testé** :
-```c
-int a = 10; int res = 0;
-{ int a = 20; res = res + a; /* 20 */
-  { int a = 30; res = res + a; /* 50 */ }
-  res = res + a; /* 70 */ }
-res = res + a; /* 80 → return 80 */
-```
-
-**Fichiers modifiés** : `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`
-
----
-
-## Grammaire complète
-
-```antlr
-grammar ifcc;
-
-prog : function_def+ EOF ;
-function_def : type VAR '(' parameters? ')' '{' statement* '}' ;
-parameters : type VAR (',' type VAR)* ;
-type : 'int' | 'double' | 'void' | 'char' ;
-
-statement : declaration ';' | expr ';' | return_stmt | block
-          | ifStmt | whileStmt | switchStmt | breakStmt | continueStmt ;
-
-block : '{' statement* '}' ;
-ifStmt    : 'if' '(' expr ')' statement ('else' statement)? ;
-whileStmt : 'while' '(' expr ')' statement ;
-switchStmt : 'switch' '(' expr ')' '{' switchCase* '}' ;
-switchCase : 'case' CONST ':' statement*    # caseClause
-           | 'default' ':' statement*       # defaultClause
-           ;
-breakStmt    : 'break' ';' ;
-continueStmt : 'continue' ';' ;
-
-declaration : type VAR '=' expr         # declVar
-            | type VAR '[' CONST ']'    # declArray
-            | type VAR                  # declVarUninit
-            ;
-lvalue : VAR '[' expr ']'  # lvalueArray
-       | VAR               # lvalueVar
-       ;
-
-expr : '-' expr                              # unaryMinusExpr
-     | '!' expr                              # logicalNotExpr
-     | expr ('*' | '/' | '%') expr           # mulDivModExpr
-     | expr ('+' | '-') expr                 # addSubExpr
-     | expr ('<' | '>' | '<=' | '>=') expr   # relExpr
-     | expr ('==' | '!=') expr               # eqExpr
-     | expr '&' expr                         # bitAndExpr
-     | expr '^' expr                         # bitXorExpr
-     | expr '|' expr                         # bitOrExpr
-     | expr '&&' expr                        # logicalAndExpr
-     | expr '||' expr                        # logicalOrExpr
-     | <assoc=right> lvalue '=' expr         # assignExpr
-     | VAR '(' (expr (',' expr)*)? ')'       # callExpr
-     | VAR '[' expr ']'                      # arrayAccessExpr
-     | '(' expr ')'                          # parenExpr
-     | CONST_DOUBLE                          # constDoubleExpr
-     | CONST                                 # constExpr
-     | CHAR_CONST                            # charExpr
-     | VAR                                   # varExpr
-     ;
-
-return_stmt : RETURN expr ';' ;
-RETURN : 'return' ;
-VAR : [a-zA-Z_][a-zA-Z_0-9]* ;
-CONST_DOUBLE : [0-9]+ '.' [0-9]* | '.' [0-9]+ ;
-CONST : [0-9]+ ;
-CHAR_CONST : '\'' ( '\\' [nrt0\\'] | ~['\\\r\n] ) '\'' ;
-COMMENT      : '/*' .*? '*/' -> skip ;
-LINE_COMMENT : '//' ~[\r\n]* -> skip ;
-DIRECTIVE    : '#' .*? '\n' -> skip ;
-WS           : [ \t\r\n] -> channel(HIDDEN) ;
-```
-
----
-
-## Nouvelles instructions IR (4.22–4.24)
-
-Aucune nouvelle instruction IR n'a été nécessaire pour ces fonctionnalités — elles sont entièrement construites à partir des instructions existantes (`cmp_eq`, `cmp_neq`, `ldconst`, `copy`) combinées avec la structure de BasicBlocks et de branchements conditionnels.
+**Fichiers modifiés** : `ifcc.g4`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
 
 ---
 
@@ -678,6 +532,7 @@ Aucune nouvelle instruction IR n'a été nécessaire pour ces fonctionnalités �
 | `sub` | `movl + subl` | Soustraction int |
 | `mul` | `movl + imull` | Multiplication int |
 | `div_int` | `cltd + idivl` | Division entière signée |
+| `mod_int` | `cltd + idivl` | Modulo entier (résultat dans `%edx`) |
 | `add_double` | `movsd + addsd` | Addition double |
 | `sub_double` | `movsd + subsd` | Soustraction double |
 | `mul_double` | `movsd + mulsd` | Multiplication double |
@@ -690,14 +545,129 @@ Aucune nouvelle instruction IR n'a été nécessaire pour ces fonctionnalités �
 | `cmp_le` | `cmpl + setle` | Inférieur ou égal (`<=`) |
 | `cmp_gt` | `cmpl + setg` | Supérieur (`>`) |
 | `cmp_ge` | `cmpl + setge` | Supérieur ou égal (`>=`) |
-| `mod` | `cltd + idivl` (résultat dans `%edx`) | Modulo entier signé |
+| `bit_and` | `andl` | AND bit-à-bit |
+| `bit_xor` | `xorl` | XOR bit-à-bit |
+| `bit_or` | `orl` | OR bit-à-bit |
+| `shl` | `sall %cl` | Décalage à gauche (`<<`) |
+| `shr` | `sarl %cl` | Décalage à droite arithmétique (`>>`) |
+| `logical_not` | `cmpl $0 + sete` | NOT logique (`!`) |
 | `call` | `movl args → regs; call func` | Appel de fonction (ABI System V) |
-| `lea` | `leaq src(%rbp), %rax; movq %rax, dest` | Charge l'adresse effective d'une variable |
-| `wmem` | `movq addr, %rax; movl val, (%rax)` | Écrit un int à l'adresse calculée |
-| `wmem_double` | `movq addr, %rax; movsd val, (%rax)` | Écrit un double à l'adresse calculée |
-| `rmem` | `movq addr, %rax; movl (%rax), dest` | Lit un int depuis une adresse calculée |
-| `rmem_double` | `movq addr, %rax; movsd (%rax), dest` | Lit un double depuis une adresse calculée |
-| `add_addr` | `addq offset, %rax` | Décale une adresse (accès tableau) |
+| `lea` | `leaq src(%rbp), %rax` | Charge l'adresse effective |
+| `rmem` | `movq addr; movl (%rax)` | Lit un int depuis une adresse |
+| `wmem` | `movq addr; movl val, (%rax)` | Écrit un int à l'adresse |
+| `wmem_double` | `movq addr; movsd val, (%rax)` | Écrit un double à l'adresse |
+| `add_addr` | `addq` | Arithmétique d'adresse (tableaux) |
+
+---
+
+#### `switch/case`
+
+**Objectif** : Supporter la structure `switch/case` du C.
+
+**Implémentation** :
+- **Grammaire** : `switchStmt : 'switch' '(' expr ')' '{' switchCase* defaultCase? '}'`
+- Chaque `case` génère un BasicBlock avec une comparaison `cmp_eq` entre la valeur du switch et la constante du case.
+- `break` à la fin d'un case saute au bloc de sortie via le `loopStack` (partagé avec les boucles).
+- Le `default` est un bloc de repli si aucun case ne correspond.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`
+
+---
+
+#### Boucle `do-while`
+
+**Objectif** : Supporter la boucle `do { ... } while (cond)`.
+
+**Implémentation** :
+- **Grammaire** : `doWhileStmt : 'do' statement 'while' '(' expr ')' ';'`
+- Différence avec `while` : le corps est exécuté **avant** le premier test de la condition.
+- Structure en BasicBlocks : `bb_body` → `bb_cond` → (`bb_body` si vrai | `bb_end` si faux).
+- `break`/`continue` fonctionnent via le même `loopStack`.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+#### Opérateur ternaire `? :`
+
+**Objectif** : Supporter l'expression conditionnelle `cond ? val_vrai : val_faux`.
+
+**Implémentation** :
+- **Grammaire** : `ternaryExpr : expr '?' expr ':' expr` avec associativité droite.
+- Crée 3 BasicBlocks : évaluation de la condition → branche vraie → branche fausse → suite.
+- Le résultat est écrit dans une variable temporaire commune aux deux branches.
+- Constant folding : si la condition est constante, seule la branche correspondante est générée.
+
+**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+
+---
+
+### Reciblage ARM64
+
+**Objectif** : Générer de l'assembleur ARM64 (Apple Silicon / Linux ARM) depuis le même IR, sans modifier le front-end.
+
+**Principe** : à l'étape de génération d'assembleur (`gen_asm()`), chaque `CFG` connaît sa cible (`target = "x86"` ou `"arm64"`). Chaque instruction IR dispatchs vers sa méthode de génération correspondante.
+
+**Différences majeures ARM64 vs x86-64** :
+
+| Aspect | x86-64 | ARM64 |
+|--------|--------|-------|
+| Frame pointer | `%rbp` | `x29` |
+| Link register | (dans la pile) | `x30` |
+| Prologue | `pushq %rbp; movq %rsp, %rbp` | `stp x29, x30, [sp, #-16]!; mov x29, sp` |
+| Épilogue | `leave; ret` | `ldp x29, x30, [sp], #16; ret` |
+| Chargement variable | `movl -8(%rbp), %eax` | `ldur w0, [x29, #-8]` |
+| Écriture variable | `movl %eax, -8(%rbp)` | `stur w0, [x29, #-8]` |
+| Appel de fonction | `call foo` | `bl foo` |
+| Arguments | `%edi`, `%esi`, ... | `w0`, `w1`, ... |
+| Retour (int) | `%eax` | `w0` |
+
+**Gestion des grands offsets** : `ldur`/`stur` ARM64 n'acceptent pas d'offsets > 255. Un helper `arm64_load_w` utilise un registre temporaire `x11` dans ce cas :
+```asm
+sub x11, x29, #320    ; offset > 255
+ldr w8, [x11]
+```
+
+**Fichiers modifiés** : `IR.h`, `IR.cpp`, `IRGenVisitor.cpp`, `main.cpp`
+
+---
+
+### Corrections de robustesse
+
+#### Fix `5_no_return` — initialisation de `!retval`
+
+**Problème** : une fonction `int main() { 42; }` (sans `return`) retournait 255 au lieu de 0. La variable `!retval` n'était jamais écrite, sa valeur sur la pile était indéterminée.
+
+**Fix** : dans `gen_asm_prologue`, `!retval` est maintenant initialisé à 0 (`movl $0, -4(%rbp)`) dès l'entrée dans la fonction. Conforme à la norme C99 : atteindre la fin de `main` sans `return` équivaut à `return 0`.
+
+#### Fix `#include <cstdint>` dans `IR.cpp`
+
+**Problème** : `uint64_t` utilisé pour la représentation IEEE 754 des constantes double n'était pas déclaré sur certains compilateurs.
+
+**Fix** : ajout de `#include <cstdint>` dans `IR.cpp`.
+
+---
+
+### Programme de démonstration — `game.c`
+
+Un jeu de devinette de nombre compilable avec `ifcc`, conçu pour la démonstration en soutenance.
+
+```bash
+compiler/ifcc testfiles/game.c > game.s
+gcc game.s -o game
+printf '10\n80\n42\n' | ./game
+```
+
+Sortie :
+```
+=== Devinez (1-100) ===
+> Trop petit !
+> Trop grand !
+> Bravo ! Trouve en 3 essais.
+```
+
+Le jeu illustre en un seul programme : fonctions, récursion, boucle `while`, `&&` paresseux, `if/else`, arithmétique entière, convention d'appel ABI.
+Voir `testfiles/GAME_README.md` pour le walkthrough assembleur complet.
 
 ---
 
@@ -717,43 +687,34 @@ gcc output.s -o output
 echo $?  # affiche le code de retour
 
 # Lancer la suite de tests
-python3 ifcc-test.py testfiles/*.c
+cd ..
+python3 ifcc-test.py testfiles/
 ```
-
----
-
-## Intégration continue (CI/CD)
-
-Un pipeline **GitHub Actions** (`ci.yml`) s'exécute automatiquement sur chaque `push` et `pull_request` vers `main`/`master` :
-
-1. **Environnement** : Ubuntu 22.04
-2. **Dépendances** : JDK, g++, make, cmake, Python 3
-3. **ANTLR 4.13.2** : le runtime C++ est compilé depuis les sources pour matcher exactement la version locale
-4. **Build** : `make clean && make -j4` dans `compiler/`
-5. **Tests** : `python3 ifcc-test.py testfiles/*.c`
-
-> **Compatibilité std::any** : un wrapper `castAny<T>` (section 4.21) permet de compiler avec ANTLR 4.9 (`antlrcpp::Any::as<T>()`) et ANTLR 4.10+ (`std::any_cast<T>()`) sans aucune modification.
 
 ---
 
 ## Tests
 
-La suite de tests (`python3 ifcc-test.py testfiles/*.c`) couvre **72 cas** (**72/72** ✅) :
+La suite de tests (`ifcc-test.py`) couvre **75 cas** (75/75 passent) :
 - Retour de constantes et variables
-- Déclarations et affectations (avec/sans initialisation)
-- Arithmétique complète (`+`, `-`, `*`, `/`, `%`, parenthèses, moins unaire, priorités)
-- Appels de fonctions (`putchar`, `getchar`, fonctions utilisateur, récursion)
-- Fonctions multiples avec paramètres (jusqu'à 10 arguments)
-- Fonctions `void` (sans valeur de retour)
-- Boucle `while` (factorielle itérative, Fibonacci, tableaux)
-- `return` multiples (`if`/`else` imbriqués)
-- Tableaux unidimensionnels (`int` et `double`)
-- Flottants (`double`, conversions implicites `int` ↔ `double`)
-- Constantes caractères (`'A'`, `'\n'`, `'\\`)
-- Opérateurs bit-à-bit (`&`, `^`, `|`)
-- Négation logique (`!`)
-- **Opérateurs logiques paresseux `&&` et `||`** (court-circuit réel)
-- **Affectation comme expression** (`a = b = c = 5`, `(d = 20) + 5`)
-- **Portées de blocs** (shadowing de variables imbriqué)
-- **`break` et `continue`** dans les boucles `while`
-- **`switch...case`** avec fall-through, `default`, et `break`
+- Déclarations et affectations (simples, chaînes, swap)
+- Arithmétique complète (+, -, *, /, %, parenthèses, moins unaire, priorités)
+- Opérations bit-à-bit (&, ^, |, <<, >>)
+- Opérateurs logiques (!, &&, ||)
+- Comparaisons (<, >, <=, >=, ==, !=)
+- Appels de fonctions (putchar, fonctions utilisateur, >6 args)
+- Fonctions multiples avec paramètres, récursion
+- Boucles while et for (avec break/continue)
+- Types double avec conversions implicites
+- Tableaux unidimensionnels
+- Portées de variables et shadowing
+- Opérateurs composés (+=, -=, *=, /=, %=)
+- Incrémentation/décrémentation (++, --)
+- Constantes caractère ('a', '\n')
+- Boucles `do-while`
+- `switch/case` avec `break`
+- Opérateur ternaire `? :`
+- `break` et `continue` imbriqués
+- Cas d'erreur (syntaxe invalide, main manquant, no-return)
+- Return multiples (classify, abs)
+- Programme de démonstration complet (`game.c`)

@@ -296,3 +296,82 @@ antlrcpp::Any SymbolTableVisitor::visitBlock(ifccParser::BlockContext *ctx) {
     popScope();
     return 0;
 }
+
+antlrcpp::Any SymbolTableVisitor::visitWhileStmt(ifccParser::WhileStmtContext *ctx) {
+    loopDepth++;
+    visitChildren(ctx);
+    loopDepth--;
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitDoWhileStmt(ifccParser::DoWhileStmtContext *ctx) {
+    loopDepth++;
+    visitChildren(ctx);
+    loopDepth--;
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitForStmt(ifccParser::ForStmtContext *ctx) {
+    pushScope();
+    loopDepth++;
+    visitChildren(ctx);
+    loopDepth--;
+    popScope();
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitBreakStmt(ifccParser::BreakStmtContext *ctx) {
+    if (loopDepth == 0) {
+        std::cerr << "error: 'break' statement not within a loop" << std::endl;
+        hasError = true;
+    }
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitContinueStmt(ifccParser::ContinueStmtContext *ctx) {
+    if (loopDepth == 0) {
+        std::cerr << "error: 'continue' statement not within a loop" << std::endl;
+        hasError = true;
+    }
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitPreIncExpr(ifccParser::PreIncExprContext *ctx) {
+    std::string varName = ctx->VAR()->getText();
+    if (!isVariableDeclared(varName)) {
+        std::cerr << "error: variable '" << varName << "' not declared" << std::endl;
+        hasError = true;
+    }
+    usedVariables.insert(varName);
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitPreDecExpr(ifccParser::PreDecExprContext *ctx) {
+    std::string varName = ctx->VAR()->getText();
+    if (!isVariableDeclared(varName)) {
+        std::cerr << "error: variable '" << varName << "' not declared" << std::endl;
+        hasError = true;
+    }
+    usedVariables.insert(varName);
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitPostIncStmt(ifccParser::PostIncStmtContext *ctx) {
+    std::string varName = ctx->VAR()->getText();
+    if (!isVariableDeclared(varName)) {
+        std::cerr << "error: variable '" << varName << "' not declared" << std::endl;
+        hasError = true;
+    }
+    usedVariables.insert(varName);
+    return 0;
+}
+
+antlrcpp::Any SymbolTableVisitor::visitPostDecStmt(ifccParser::PostDecStmtContext *ctx) {
+    std::string varName = ctx->VAR()->getText();
+    if (!isVariableDeclared(varName)) {
+        std::cerr << "error: variable '" << varName << "' not declared" << std::endl;
+        hasError = true;
+    }
+    usedVariables.insert(varName);
+    return 0;
+}

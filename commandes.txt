@@ -1,0 +1,5 @@
+Lancer tous les tests : wsl -d Ubuntu-22.04 -u antlr_user bash -c "cd /mnt/c/Users/Nospace/PLD_COMP && python3 ifcc-test.py testfiles"
+
+Créer les assembleurs : wsl -d Ubuntu-22.04 -u antlr_user bash -c "rm -rf /mnt/c/Users/Nospace/PLD_COMP/build_artifacts && bash /mnt/c/Users/Nospace/PLD_COMP/build_all.sh"
+
+Lancer game.s une fois compile : wsl -d Ubuntu-22.04 -u antlr_user bash -c "cd /mnt/c/Users/Nospace/PLD_COMP/build_artifacts && gcc game.s -o game && ./game"

@@ -19,6 +19,15 @@ public:
     virtual antlrcpp::Any visitArrayAccessExpr(ifccParser::ArrayAccessExprContext *ctx) override;
     virtual antlrcpp::Any visitCallExpr(ifccParser::CallExprContext *ctx) override;
     virtual antlrcpp::Any visitBlock(ifccParser::BlockContext *ctx) override;
+    virtual antlrcpp::Any visitWhileStmt(ifccParser::WhileStmtContext *ctx) override;
+    virtual antlrcpp::Any visitForStmt(ifccParser::ForStmtContext *ctx) override;
+    virtual antlrcpp::Any visitBreakStmt(ifccParser::BreakStmtContext *ctx) override;
+    virtual antlrcpp::Any visitContinueStmt(ifccParser::ContinueStmtContext *ctx) override;
+    virtual antlrcpp::Any visitPreIncExpr(ifccParser::PreIncExprContext *ctx) override;
+    virtual antlrcpp::Any visitPreDecExpr(ifccParser::PreDecExprContext *ctx) override;
+    virtual antlrcpp::Any visitPostIncStmt(ifccParser::PostIncStmtContext *ctx) override;
+    virtual antlrcpp::Any visitPostDecStmt(ifccParser::PostDecStmtContext *ctx) override;
+    virtual antlrcpp::Any visitDoWhileStmt(ifccParser::DoWhileStmtContext *ctx) override;
 
     // Scope stack: each element is a map of variable names to memory indices
     std::vector<std::map<std::string, int>> scopeStack;
@@ -30,6 +39,7 @@ public:
     bool isVariableDeclared(const std::string& name) const;
 
 private:
+    int loopDepth = 0;
     int nextFreeIndex = 4;
 
     // Scope management

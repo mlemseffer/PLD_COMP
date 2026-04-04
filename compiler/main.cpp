@@ -18,21 +18,40 @@ using namespace std;
 
 int main(int argn, const char **argv)
 {
+  // Déterminer le fichier source et l'architecture cible
+  string target = "";
+  string sourceFile = "";
+
+  for (int i = 1; i < argn; i++) {
+      string arg = argv[i];
+      if (arg == "--target=x86") target = "x86";
+      else if (arg == "--target=arm64") target = "arm64";
+      else sourceFile = arg;
+  }
+
+  if (sourceFile.empty()) {
+      cerr << "usage: ifcc [--target=x86|arm64] path/to/file.c" << endl;
+      exit(1);
+  }
+
+  // Auto-détection si pas spécifié
+  if (target.empty()) {
+      #if defined(__aarch64__) || defined(__arm64__)
+      target = "arm64";
+      #else
+      target = "x86";
+      #endif
+  }
+
   stringstream in;
-  if (argn==2)
   {
-     ifstream lecture(argv[1]);
+     ifstream lecture(sourceFile);
      if( !lecture.good() )
      {
-         cerr<<"error: cannot read file: " << argv[1] << endl ;
+         cerr<<"error: cannot read file: " << sourceFile << endl ;
          exit(1);
      }
      in << lecture.rdbuf();
-  }
-  else
-  {
-      cerr << "usage: ifcc path/to/file.c" << endl ;
-      exit(1);
   }
   
   ANTLRInputStream input(in.str());
@@ -67,6 +86,7 @@ int main(int argn, const char **argv)
 
   // Passe 3 : génération de code assembleur depuis l'IR
   for (auto cfg : irv.getCFGs()) {
+      cfg->target = target;
       cfg->gen_asm(cout);
   }
 

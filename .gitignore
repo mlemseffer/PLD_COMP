@@ -17,3 +17,18 @@ ifcc-test-output/
 # Local configuration
 compiler/config.mk
 localconfig.txt
+commandes.txt
+
+# Course materials and poly
+Cours/
+poly.md
+
+# macOS
+.DS_Store
+
+# ANTLR Java output (generated in compiler/ by mistake)
+compiler/*.java
+compiler/*.interp
+compiler/*.tokens
+compiler/*.jar
+compiler/ifcc_dyn
