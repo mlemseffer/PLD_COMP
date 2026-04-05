@@ -110,7 +110,7 @@ private:
     // Matérialise un ExprValue constant en variable temporaire si besoin
     string materialize(ExprValue& val);
 
-    // ===== Propagation des variables constantes =====
+    //  Propagation des variables constantes 
     map<string, int> constMap;
     set<string> collectAssignedVars(antlr4::tree::ParseTree* tree);
 

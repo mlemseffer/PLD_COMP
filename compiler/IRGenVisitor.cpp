@@ -12,7 +12,7 @@ T castAny(AnyType a) {
     }
 }
 
-// ===== Collecte des variables affectées dans un sous-arbre AST =====
+//  Collecte des variables affectées dans un sous-arbre AST 
 set<string> IRGenVisitor::collectAssignedVars(antlr4::tree::ParseTree* tree) {
     set<string> result;
     if (auto* assignCtx = dynamic_cast<ifccParser::AssignExprContext*>(tree)) {
@@ -75,7 +75,7 @@ set<string> IRGenVisitor::collectAssignedVars(antlr4::tree::ParseTree* tree) {
     return result;
 }
 
-// ===== Helpers =====
+// Helpers
 
 Type IRGenVisitor::parseType(ifccParser::TypeContext* ctx) {
     string text = ctx->getText();
@@ -134,7 +134,7 @@ string IRGenVisitor::materialize(ExprValue& val) {
     return val.varName;
 }
 
-// ===== Visiteurs =====
+// Visiteurs Fonctions
 
 antlrcpp::Any IRGenVisitor::visitProg(ifccParser::ProgContext *ctx) {
     for (auto func : ctx->function_def()) {

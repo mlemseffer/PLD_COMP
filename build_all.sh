@@ -2,7 +2,7 @@
 cd /mnt/c/Users/Nospace/PLD_COMP
 mkdir -p build_artifacts
 
-echo "===== Compiling all test files ====="
+echo " Compiling all test files "
 for file in testfiles/*.c; do
     name=$(basename "$file" .c)
     echo "Compiling $name..."
@@ -15,7 +15,7 @@ for file in testfiles/*.c; do
 done
 
 echo ""
-echo "===== Artifacts created ====="
+echo " Artifacts created "
 ls -lh build_artifacts/ | tail -20
 echo ""
 echo "Total files:"

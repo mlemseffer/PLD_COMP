@@ -1,7 +1,7 @@
 #include "SymbolTableVisitor.h"
 #include <iostream>
 
-// ===== Scope management =====
+//  Scope management 
 
 void SymbolTableVisitor::pushScope() {
     scopeStack.push_back({});
@@ -38,7 +38,7 @@ int SymbolTableVisitor::lookupVariable(const std::string& name) const {
     return -1; // not found
 }
 
-// ===== Visitors =====
+// Visiteurs Fonctions
 
 antlrcpp::Any SymbolTableVisitor::visitProg(ifccParser::ProgContext *ctx) {
     // Passe 1 : enregistrer toutes les fonctions définies (nom + nb params)

@@ -5,7 +5,7 @@
 
 using namespace std;
 
-// ==================== IRInstr ====================
+//  IRInstr 
 
 IRInstr::IRInstr(BasicBlock* bb_, Operation op, Type t, vector<string> params)
     : bb(bb_), op(op), t(t), params(params) {}
@@ -386,7 +386,7 @@ void IRInstr::gen_asm_x86(ostream &o) {
     }
 }
 
-// ==================== IRInstr ARM64 backend ====================
+//  IRInstr ARM64 backend 
 
 void IRInstr::gen_asm_arm64(ostream &o) {
     auto& cfg = *bb->cfg;
@@ -623,7 +623,7 @@ void IRInstr::gen_asm_arm64(ostream &o) {
     }
 }
 
-// ==================== BasicBlock ====================
+//  BasicBlock 
 
 BasicBlock::BasicBlock(CFG* cfg, string entry_label)
     : cfg(cfg), label(entry_label), exit_true(nullptr), exit_false(nullptr) {}
@@ -673,7 +673,7 @@ void BasicBlock::add_IRInstr(IRInstr::Operation op, Type t, vector<string> param
     instrs.push_back(new IRInstr(this, op, t, params));
 }
 
-// ==================== CFG ====================
+//  CFG 
 
 CFG::CFG(DefFonction* ast, string name)
     : ast(ast), funcName(name), returnType(INT), nextFreeSymbolIndex(0), nextBBnumber(1), nextTempVarIndex(0), current_bb(nullptr) {}
@@ -826,7 +826,7 @@ string CFG::new_BB_name() {
     return ".LBB_" + funcName + "_" + to_string(nextBBnumber++);
 }
 
-// ==================== ARM64 helpers ====================
+//  ARM64 helpers 
 
 void CFG::arm64_load_w(ostream& o, string wreg, string ir_var) {
     // Pseudo-registres ABI x86 -> ARM64

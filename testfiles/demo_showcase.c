@@ -1,8 +1,4 @@
 #include <stdio.h>
-// ============================================================
-//  IFCC Compiler Demo — Showcase of all implemented features
-//  Compiled by our own compiler, assembled by GCC, run natively
-// ============================================================
 
 // ---- Utility: print a positive integer to stdout ----
 void print_int(int x) {
@@ -166,7 +162,7 @@ int test_chars() {
     return 1;
 }
 
-// ======== MAIN : run all tests and display results ========
+// === MAIN : run all tests and display results ===
 
 void check(int condition, int test_id) {
     putchar('[');
