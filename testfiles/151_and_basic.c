@@ -1,4 +1,0 @@
-// Test: bitwise AND - 0xFF & 0x0F = 15
-int main() {
-    return 0xFF & 0x0F;
-}

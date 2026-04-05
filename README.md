@@ -436,23 +436,31 @@ printf '10\n80\n42\n' | ./game
 | `symbole.h` | Placeholder (la table des symboles est dans CFG) |
 | `config.mk` | Chemins ANTLR et options de compilation |
 | `ifcc-test.py` | Script de test (compare ifcc avec GCC) |
-| `testfiles/` | 150 programmes de test |
+| `testfiles/` | ~190 programmes de test |
 | `testfiles/game.c` | Programme de demo pour la soutenance |
 
 
-## Limitations
+## Limitations et bugs connus
 
-Ce qu'on ne supporte pas :
+### Ce qu'on ne supporte pas
 
 - Pas de pointeurs ni d'arithmetique de pointeurs
 - Pas de strings / `char*`
 - Pas de `struct` ni `union`
-- Pas de variables globales
+- Pas de variables globales (tout est local aux fonctions)
 - Pas de preprocesseur (les `#include` sont juste ignores)
 - Pas de `float` (on a `double` mais pas `float`)
-- Pas de cast explicite
+- Pas de cast explicite (conversions implicites seulement)
 - Pas de compilation separee (tout dans un seul fichier)
-- Pas de types `unsigned`
+- Pas de types `unsigned`, `long`, `short`
+- Pas de constantes hexadecimales (`0xFF` non reconnu, utiliser `255`)
+- Pas de forward declarations de fonctions (`int f(int);` ne compile pas)
+- Pas de `switch/case` (malgre ce qui est mentionne dans les fichiers de demo, on n'a finalement pas eu le temps de l'ajouter a la grammaire)
 - Tableaux : taille fixe seulement, 1D seulement
-- ARM64 : pas de support `double`
-- Post-increment/decrement : statements seulement, pas expressions
+- Post-increment/decrement (`x++`, `x--`) : ce sont des statements, pas des expressions. Du coup `i++` ne peut pas etre utilise dans la partie update d'un `for`. Il faut utiliser `++i` a la place.
+
+### Bugs connus
+
+- **ARM64 : pas de support `double`**. Le backend ARM64 ne genere pas de code pour les instructions double. Quand on compile un programme qui utilise des doubles sur ARM64, ca compile mais les resultats sont faux a l'execution. Sur x86, les doubles marchent correctement.
+- **`while(0)`** sur ARM64 : quand la condition d'un while est le literal `0` (constante propagee), le corps de la boucle est quand meme execute une fois. Ca vient d'un probleme dans la generation des sauts quand la condition est une constante directement foldee. Le contournement est d'utiliser une variable (`int c = 0; while(c) {...}` au lieu de `while(0)`).
+- **`putchar`/`getchar` sans declaration** : notre compilateur connait ces fonctions en builtin, donc on peut les appeler sans `#include <stdio.h>`. Par contre GCC les rejette sans la declaration, ce qui fait que les tests qui utilisent putchar echouent quand on compare avec GCC (le test runner voit que GCC rejette le programme alors que ifcc l'accepte). Les tests existants qui passent (37, 48, 7, etc.) fonctionnent parce que `#include <stdio.h>` est ignore par notre compilateur mais pris en compte par GCC.

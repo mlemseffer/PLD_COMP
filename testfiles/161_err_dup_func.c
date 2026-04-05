@@ -1,0 +1,6 @@
+/* 4.15 Error: duplicate function definition */
+int foo() { return 1; }
+int foo() { return 2; }
+int main() {
+    return foo();
+}

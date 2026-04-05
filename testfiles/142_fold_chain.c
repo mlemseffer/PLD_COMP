@@ -1,0 +1,4 @@
+/* 4.9 Constant folding: long chain of constant ops */
+int main() {
+    return 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10;
+}
