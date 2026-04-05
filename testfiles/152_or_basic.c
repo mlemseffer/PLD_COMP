@@ -1,0 +1,4 @@
+// Test: bitwise OR - 0xF0 | 0x0F = 255
+int main() {
+    return 0xF0 | 0x0F;
+}

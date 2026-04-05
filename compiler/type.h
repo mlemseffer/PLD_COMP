@@ -18,7 +18,7 @@ inline int typeSize(Type t) {
     }
 }
 
-// Retourne le type "dominant" pour les conversions implicites (int → double)
+// Retourne le type "dominant" pour les conversions implicites (int -> double)
 inline Type promoteType(Type a, Type b) {
     if (a == DOUBLE || b == DOUBLE) return DOUBLE;
     return INT;

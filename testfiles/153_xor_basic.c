@@ -1,0 +1,4 @@
+// Test: bitwise XOR - 0xFF ^ 0xFF = 0
+int main() {
+    return 0xFF ^ 0xFF;
+}

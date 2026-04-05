@@ -36,11 +36,11 @@ class IRInstr {
 		sub_double,
 		mul_double,
 		div_double,
-		int_to_double,  // conversion int → double (cvtsi2sdl)
-		double_to_int,  // conversion double → int (cvttsd2si)
-		rmem,      // read memory: params = [dest, addr_var] — load value from address
+		int_to_double,  // conversion int -> double (cvtsi2sdl)
+		double_to_int,  // conversion double -> int (cvttsd2si)
+		rmem,      // read memory: params = [dest, addr_var], charge la valeur depuis l'adresse
 		rmem_double, // read memory (double): params = [dest, addr_var]
-		wmem,      // write memory: params = [addr_var, value_var] — store value at the address held in addr_var
+		wmem,      // write memory: params = [addr_var, value_var], ecrit la valeur a l'adresse dans addr_var
 		call, 
 		cmp_eq,
 		cmp_neq,
@@ -49,13 +49,13 @@ class IRInstr {
 		cmp_gt,
 		cmp_ge,
 		wmem_double, // write memory (double): params = [addr_var, value_var]
-		lea,       // load effective address: params = [dest, src_var] — dest = &src_var
-		add_addr,  // address arithmetic: params = [dest, addr, offset] — dest = addr + offset (all 8-byte)
+		lea,       // load effective address: params = [dest, src_var], dest = &src_var
+		add_addr,  // address arithmetic: params = [dest, addr, offset], dest = addr + offset (8 bytes)
 		mod_int,   // modulo entier (idivl, résultat dans %edx)
 		bit_and,   // AND bit-à-bit
 		bit_xor,   // XOR bit-à-bit
 		bit_or,    // OR bit-à-bit
-		logical_not, // NOT logique : !x (0→1, non-zéro→0)
+		logical_not, // NOT logique : !x (0->1, non-zero->0)
 		shl,       // décalage à gauche (<<)
 		shr        // décalage à droite arithmétique (>>)
 	} Operation;
@@ -174,7 +174,7 @@ class CFG {
 	string new_BB_name();
 	BasicBlock* current_bb;
 
-	// Double constants stored in .rodata section (label → hex representation)
+	// Double constants stored in .rodata section (label -> hex representation)
 	vector<pair<string, double>> doubleConstants;
 
  public: // accessible par IRInstr pour la génération ARM64

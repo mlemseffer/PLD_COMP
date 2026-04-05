@@ -28,7 +28,7 @@ void IRInstr::gen_asm_x86(ostream &o) {
             break;
 
         case ldconst_double:
-            // params = [dest, label]  — le label pointe vers .rodata
+            // params = [dest, label], le label pointe vers .rodata
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    movsd " << params[1] << "(%rip), %xmm0\n";
             o << "    movsd %xmm0, " << dest << "\n";
@@ -78,12 +78,12 @@ void IRInstr::gen_asm_x86(ostream &o) {
             break;
 
         case div_int:
-            // params = [dest, src1, src2] → dest = src1 / src2
+            // params = [dest, src1, src2], dest = src1 / src2
             src1 = bb->cfg->IR_reg_to_asm(params[1]);
             src2 = bb->cfg->IR_reg_to_asm(params[2]);
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    movl " << src1 << ", %eax\n";
-            o << "    cltd\n";  // sign-extend eax → edx:eax
+            o << "    cltd\n";  // sign-extend eax -> edx:eax
             o << "    idivl " << src2 << "\n";
             o << "    movl %eax, " << dest << "\n";
             break;
@@ -272,7 +272,7 @@ void IRInstr::gen_asm_x86(ostream &o) {
         }
 
         case lea: {
-            // params = [dest, src_var] — dest = &src_var (load effective address)
+            // params = [dest, src_var], dest = &src_var (load effective address)
             string srcAddr = bb->cfg->IR_reg_to_asm(params[1]);
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    leaq " << srcAddr << ", %rax\n";
@@ -281,7 +281,7 @@ void IRInstr::gen_asm_x86(ostream &o) {
         }
 
         case rmem: {
-            // params = [dest, addr_var] — dest = *(int*)addr_var
+            // params = [dest, addr_var], dest = *(int*)addr_var
             string addrVar = bb->cfg->IR_reg_to_asm(params[1]);
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    movq " << addrVar << ", %rax\n";
@@ -291,7 +291,7 @@ void IRInstr::gen_asm_x86(ostream &o) {
         }
 
         case rmem_double: {
-            // params = [dest, addr_var] — dest = *(double*)addr_var
+            // params = [dest, addr_var], dest = *(double*)addr_var
             string addrVar = bb->cfg->IR_reg_to_asm(params[1]);
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    movq " << addrVar << ", %rax\n";
@@ -301,24 +301,24 @@ void IRInstr::gen_asm_x86(ostream &o) {
         }
 
         case add_addr: {
-            // params = [dest, addr, offset_int] — dest = addr + (int64)offset (addr is 8-byte, offset is 4-byte int)
+            // params = [dest, addr, offset_int], dest = addr + (int64)offset (addr 8 bytes, offset 4 bytes)
             string addrVar = bb->cfg->IR_reg_to_asm(params[1]);
             string offsetVar = bb->cfg->IR_reg_to_asm(params[2]);
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    movq " << addrVar << ", %rax\n";
-            o << "    movslq " << offsetVar << ", %rcx\n";  // sign-extend int32 → int64
+            o << "    movslq " << offsetVar << ", %rcx\n";  // sign-extend int32 -> int64
             o << "    addq %rcx, %rax\n";
             o << "    movq %rax, " << dest << "\n";
             break;
         }
 
         case mod_int:
-            // params = [dest, src1, src2] → dest = src1 % src2
+            // params = [dest, src1, src2], dest = src1 % src2
             src1 = bb->cfg->IR_reg_to_asm(params[1]);
             src2 = bb->cfg->IR_reg_to_asm(params[2]);
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    movl " << src1 << ", %eax\n";
-            o << "    cltd\n";  // sign-extend eax → edx:eax
+            o << "    cltd\n";  // sign-extend eax -> edx:eax
             o << "    idivl " << src2 << "\n";
             o << "    movl %edx, " << dest << "\n";  // remainder in %edx
             break;
@@ -351,7 +351,7 @@ void IRInstr::gen_asm_x86(ostream &o) {
             break;
 
         case logical_not:
-            // params = [dest, src] → dest = (src == 0) ? 1 : 0
+            // params = [dest, src], dest = (src == 0) ? 1 : 0
             src1 = bb->cfg->IR_reg_to_asm(params[1]);
             dest = bb->cfg->IR_reg_to_asm(params[0]);
             o << "    cmpl $0, " << src1 << "\n";
@@ -575,7 +575,7 @@ void IRInstr::gen_asm_arm64(ostream &o) {
             // dest = addr + (int64)offset_int
             cfg.arm64_load_x(o, "x8", params[1]);
             cfg.arm64_load_w(o, "w9", params[2]);
-            o << "    sxtw x9, w9\n"; // sign-extend 32→64
+            o << "    sxtw x9, w9\n"; // sign-extend 32->64
             o << "    add x8, x8, x9\n";
             cfg.arm64_store_x(o, "x8", params[0]);
             break;
@@ -829,7 +829,7 @@ string CFG::new_BB_name() {
 // ==================== ARM64 helpers ====================
 
 void CFG::arm64_load_w(ostream& o, string wreg, string ir_var) {
-    // Pseudo-registres ABI x86 → ARM64
+    // Pseudo-registres ABI x86 -> ARM64
     if (ir_var == "!edi") { if (wreg != "w0") o << "    mov " << wreg << ", w0\n"; return; }
     if (ir_var == "!esi") { if (wreg != "w1") o << "    mov " << wreg << ", w1\n"; return; }
     if (ir_var == "!edx") { if (wreg != "w2") o << "    mov " << wreg << ", w2\n"; return; }
@@ -837,7 +837,7 @@ void CFG::arm64_load_w(ostream& o, string wreg, string ir_var) {
     if (ir_var == "!r8d") { if (wreg != "w4") o << "    mov " << wreg << ", w4\n"; return; }
     if (ir_var == "!r9d") { if (wreg != "w5") o << "    mov " << wreg << ", w5\n"; return; }
 
-    // Paramètres au-delà du 6e (index x86) → sur ARM64, les params 6 et 7 sont encore en registre
+    // Parametres au-dela du 6e (index x86) -> sur ARM64, les params 6 et 7 sont encore en registre
     if (ir_var.find("!param") == 0) {
         int index = stoi(ir_var.substr(6));
         if (index < 8) {

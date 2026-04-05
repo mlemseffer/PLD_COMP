@@ -104,7 +104,7 @@ private:
     }
     int nextVarIndex = 0;
 
-    // Émet une instruction de conversion int→double ou double→int si nécessaire.
+    // Emet une instruction de conversion int->double ou double->int si besoin.
     string emitConversion(ExprValue& val, Type targetType);
 
     // Matérialise un ExprValue constant en variable temporaire si besoin

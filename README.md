@@ -1,656 +1,412 @@
-# ifcc — Compilateur C simplifié
+# ifcc - Compilateur C simplifie
 
-> Compilateur d'un sous-ensemble du langage C vers assembleur x86-64 (System V AMD64 ABI).  
-> Projet PLD — INSA Lyon
+Compilateur d'un sous-ensemble du langage C vers assembleur x86-64 et ARM64.
+Projet PLD, INSA Lyon 4IF.
 
----
+Le compilateur s'appelle `ifcc`. Il prend un fichier `.c` en entree et produit un fichier assembleur `.s`
+qu'on peut ensuite assembler et linker avec GCC. Le langage supporte est un sous-ensemble de C
+suffisamment large pour ecrire des vrais programmes (fonctions, boucles, tableaux, doubles...).
 
-## Architecture du compilateur
+On utilise ANTLR4 pour le parsing, et le compilateur est ecrit en C++17.
+
+
+## Comment ca marche
+
+Le compilateur fait 3 passes sur le code source :
 
 ```
-Code source C  →  ANTLR4 (Lexer/Parser)  →  AST
-                                              ↓
-                                    SymbolTableVisitor (Passe 1 : vérifications sémantiques)
-                                              ↓
-                                    IRGenVisitor (Passe 2 : génération de l'IR)
-                                              ↓
-                                    CFG + BasicBlocks (Représentation Intermédiaire)
-                                              ↓
-                                    gen_asm() (Passe 3 : génération assembleur x86-64)
-                                              ↓
-                                    Fichier .s (assembleur)
+Source C  ->  ANTLR4 (lexer + parser)  ->  AST
+                                            |
+                                   Passe 1 : SymbolTableVisitor
+                                   Analyse semantique, verification des types,
+                                   detection d'erreurs
+                                            |
+                                   Passe 2 : IRGenVisitor
+                                   Generation de l'IR (code 3 adresses)
+                                   + constant folding / propagation
+                                            |
+                                   Passe 3 : CFG::gen_asm()
+                                   IR -> assembleur x86-64 ou ARM64
+                                            |
+                                        fichier .s
 ```
 
-### Fichiers principaux
+La passe 1 verifie que le programme est valide sans generer de code. La passe 2 construit
+une representation intermediaire (IR) a base de `BasicBlock` et `CFG` (control flow graph).
+La passe 3 traduit chaque instruction IR en assembleur natif. Le choix x86 vs ARM64 se fait
+a la passe 3 uniquement - les passes 1 et 2 sont completement independantes de la cible.
 
-| Fichier | Rôle |
-|---------|------|
-| `ifcc.g4` | Grammaire ANTLR4 du langage |
-| `main.cpp` | Point d'entrée du compilateur (3 passes) |
-| `SymbolTableVisitor.h/.cpp` | Analyse sémantique (variables, fonctions) |
-| `IRGenVisitor.h/.cpp` | Génération du Rendu Intermédiaire (IR) |
-| `IR.h/.cpp` | Structures IR : `IRInstr`, `BasicBlock`, `CFG` |
-| `CodeGenVisitor.h/.cpp` | Ancien générateur de code (conservé, non utilisé par défaut) |
 
----
+## Build
 
-## Étapes d'implémentation
+```bash
+cd compiler
+make
+```
 
-### 4.1–4.8 — Bases du compilateur (pré-existant)
+Il faut ANTLR4 4.13.2 et un compilo C++17. Les chemins ANTLR sont configures dans `config.mk`
+(il y a aussi `config-IF501.mk` et `config-wsl-2025.mk` pour les machines de l'INSA).
 
-Le compilateur de base était déjà en place avant cette session :
-- **Grammaire ANTLR4** : parsing d'un programme `int main() { ... }` avec déclarations, affectations, et `return`.
-- **Expressions arithmétiques** : `+`, `-`, `*`, parenthèses, moins unaire.
-- **Table des symboles** : gestion des variables locales avec détection des variables non déclarées, déjà déclarées, ou inutilisées.
-- **Génération d'assembleur** : allocation sur la pile (`-X(%rbp)`), prologue/épilogue.
-- **Suite de tests** : 30+ tests couvrant les cas de base.
+Pour compiler un programme :
 
----
+```bash
+./ifcc mon_fichier.c > output.s
+gcc output.s -o output
+./output
+echo $?   # code de retour
+```
 
-### 4.9 — Propagation de constantes dans les expressions
+Pour choisir la cible manuellement :
 
-**Objectif** : Simplifier les expressions à la compilation.
+```bash
+./ifcc --target=x86 mon_fichier.c > output.s
+./ifcc --target=arm64 mon_fichier.c > output.s
+```
 
-**Implémentation** :
-- Introduction d'un `struct ExprValue` (`IRGenVisitor.h`) qui représente le résultat d'une expression : soit une **constante** (`isConstant = true, value = N`), soit une **variable** (`isConstant = false, varName = "x"`).
-- Chaque méthode `visitXxxExpr` retourne un `ExprValue`. Si les deux opérandes sont des constantes, le calcul est effectué **à la compilation** (constant folding). Sinon, du code IR est généré.
+Si on ne specifie pas de cible, le compilateur choisit automatiquement en fonction de
+l'architecture sur laquelle il a ete compile (via `#if __aarch64__` au moment de la compilation,
+pas au runtime). Sur Mac Apple Silicon c'est ARM64 par defaut, sur les machines Linux du CI c'est x86.
 
-**Optimisations réalisées** :
-| Cas | Résultat |
-|-----|----------|
-| `2 * 3 + 4 * 5` | → compilé en `movl $26` directement |
-| `x + 0` | → simplifié en `x` |
-| `x * 1` | → simplifié en `x` |
-| `x * 0` | → simplifié en `0` |
-| `-constante` | → replié à la compilation |
 
-**Fichiers modifiés** : `IRGenVisitor.h`, `IRGenVisitor.cpp`
+## Fonctionnalites
 
----
+### Types supportes
 
-### 4.10 — Mise en place des appels de fonction
+- `int` : le type de base, 4 octets
+- `double` : flottant 64 bits, 8 octets (x86 uniquement - le backend ARM64 ne le supporte pas)
+- `char` : traite comme un `int` en interne (4 octets), ca simplifie pas mal de choses
+- `void` : pour les fonctions qui ne retournent rien
 
-**Objectif** : Supporter les appels de fonctions (jusqu'à 6 arguments) via l'ABI System V AMD64.
+La promotion implicite `int -> double` est geree automatiquement quand on melange les types
+dans une expression. Par exemple `3 + 2.5` fait une conversion du `3` en double avant l'addition.
+L'inverse (double -> int) se fait par troncature quand on affecte un double a une variable int.
 
-**Implémentation** :
-- **Grammaire** (`ifcc.g4`) : ajout de la règle `callExpr` dans les expressions : `VAR '(' (expr (',' expr)*)? ')'`.
-- **Nouvelle instruction IR** : `IRInstr::call` dans `IR.h`.
-- **Génération assembleur** (`IR.cpp`) : les arguments sont placés dans les registres ABI (`%edi`, `%esi`, `%edx`, `%ecx`, `%r8d`, `%r9d`) avant d'émettre l'instruction `call`. Le résultat (`%eax`) est récupéré dans une variable temporaire.
-- **Visiteur** (`IRGenVisitor.cpp`) : `visitCallExpr` évalue chaque argument, génère les `loadConst` nécessaires, et émet l'instruction `call`.
+### Operateurs
 
-**Exemple testé** : `putchar(98)` → affiche `'b'`.
+Tout ce qu'on utilise couramment en C est la :
 
-**Fichiers modifiés** : `ifcc.g4`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+**Arithmetique** : `+`, `-`, `*`, `/`, `%`
+Ca marche sur les int et les double (sauf `%` qui est int-only, evidemment).
 
----
+**Comparaisons** : `<`, `>`, `<=`, `>=`, `==`, `!=`
+Retournent 0 ou 1, comme en C.
 
-### 4.11 — Programmes à plusieurs fonctions et enregistrements d'activation
+**Logique avec court-circuit** : `&&`, `||`, `!`
+Le court-circuit est implemente correctement - si le premier operande de `&&` est faux,
+le deuxieme n'est pas evalue (on genere des BasicBlocks separes pour ca).
 
-**Objectif** : Compiler des programmes avec plusieurs fonctions, chacune ayant son propre espace mémoire (stack frame).
+**Bit-a-bit** : `&`, `|`, `^`, `<<`, `>>`
+Le shift droit (`>>`) est arithmetique (signe etendu), comme pour les `int` signes en C.
 
-**Implémentation** :
-- **Grammaire** : `prog : function_def+ EOF` au lieu d'un unique `int main()`. Ajout de la règle `parameters : 'int' VAR (',' 'int' VAR)*`.
-- **Architecture multi-CFG** : `IRGenVisitor` maintient un `vector<CFG*> cfgs`. Chaque `function_def` crée un nouveau `CFG` avec son propre `funcName`, sa propre table des symboles, et ses propres BasicBlocks.
-- **Récupération des paramètres ABI** : à l'entrée d'une fonction, des instructions `copy` transfèrent les registres ABI (`%edi`, `%esi`...) vers les variables locales sur la pile. Les pseudo-registres `!edi`, `!esi`... sont traduits vers `%edi`, `%esi`... par `IR_reg_to_asm`.
-- **Labels dynamiques** : `gen_asm_prologue` utilise `CFG::funcName` pour les labels (`.globl add`, `add:`).
-- **Alignement 16 octets** : `subq $X, %rsp` avec `X = ((nextFreeSymbolIndex + 15) & ~15)`.
-- **`main.cpp`** : boucle sur `irv.getCFGs()` pour générer le code de chaque fonction.
+**Affectation** : `=`, `+=`, `-=`, `*=`, `/=`, `%=`
+Les operateurs composes utilisent un helper `emitCompoundAssign` qui factorise la logique.
 
-**Exemple testé** :
+**Increment/decrement** : `++x`, `--x` (pre, expressions), `x++`, `x--` (post, statements)
+Note : les post-increments sont traites comme des statements dans la grammaire pour eviter
+des problemes d'explosion d'etats dans le parser ANTLR. Ca veut dire qu'on ne peut pas ecrire
+`a = b++` directement, mais `b++; a = b;` marche.
+
+**Ternaire** : `cond ? val_vrai : val_faux`
+Associativite droite, avec elimination du code mort si la condition est constante.
+
+### Structures de controle
+
+`if / else` - le classique, avec creation de 3 BasicBlocks (true, false, end).
+
+`while` - une fois qu'on a le `if`, le `while` c'est juste un saut de retour vers la condition
+en plus. Comme dit le sujet, c'est une question de minutes une fois l'infrastructure en place.
+
+`do-while` - le corps est execute avant le premier test de condition. Structure en BB :
+body -> cond -> (body si vrai | end si faux).
+
+`for` - decompose en 4 blocs : init -> condition -> body -> update -> condition.
+Les variables declarees dans l'init (`for (int i = 0; ...)`) ont leur propre scope.
+
+`switch/case` - chaque case genere un BB avec un `cmp_eq`. Le `default` est un bloc de repli.
+`break` dans un case saute au bloc de sortie (meme mecanisme que pour les boucles).
+
+`break` et `continue` - on maintient une pile de `LoopContext` dans le visiteur IR.
+Chaque boucle empile un contexte avec des pointeurs vers le bloc condition et le bloc end.
+`break` saute vers `bb_end`, `continue` vers `bb_cond` (ou `bb_update` pour les `for`).
+L'analyse semantique verifie qu'on n'est pas en dehors d'une boucle.
+
+### Fonctions
+
+On supporte les fonctions avec parametres types, la recursion, et la recursion mutuelle.
+
+Les 6 premiers arguments passent par les registres ABI System V (`%edi`, `%esi`, `%edx`,
+`%ecx`, `%r8d`, `%r9d` en x86). Au-dela de 6 arguments, les parametres supplementaires
+sont empiles de droite a gauche, avec alignement 16 octets du stack pointer avant le `call`.
+Cote appele, les parametres 7+ sont accedes via des offsets positifs depuis `%rbp`
+(pseudo-registres `!param6`, `!param7`, etc. traduits par `IR_reg_to_asm`).
+
+Fonctions externes reconnues : `putchar` et `getchar`.
+
+Chaque fonction a son propre CFG avec sa propre table des symboles. Un exit_bb unique
+par fonction collecte tous les return (pas de duplication de l'epilogue).
+
+### Tableaux
+
+Tableaux 1D a taille fixe, pour `int` et `double`. La declaration `int a[5]` alloue
+`5 * 4 = 20` octets sur la pile. L'acces `a[i]` calcule l'adresse de base + offset
+via l'instruction IR `add_addr` et fait un `rmem` pour lire ou un `wmem` pour ecrire.
+
+Pas de tableaux multidimensionnels, pas de taille variable.
+
+### Scoping
+
+Les blocs `{ }` creent des scopes imbriques. On peut shadower une variable du scope parent.
+Le renommage est gere dans IRGenVisitor via une pile de `scopeStack` : chaque variable
+declaree recoit un nom unique (`x_0`, `x_1`, etc.) pour eviter les collisions.
+SymbolTableVisitor a sa propre pile de scopes pour les verifications semantiques.
+
+### Return multiples
+
+Plusieurs `return` dans une meme fonction sont supportes. Chaque `return` copie la valeur
+dans `!retval` et saute vers le `exit_bb`. Le code apres un `return` dans un bloc est du
+code mort (on cree un BB fantome qui ne sera jamais atteint).
+
+
+## Optimisations
+
+### Constant folding
+
+Chaque methode `visitXxxExpr` retourne un `ExprValue` qui est soit une constante
+(`isConstant = true, value = N`), soit une variable temporaire. Si les deux operandes
+d'une operation sont des constantes, le calcul est fait a la compilation directement.
+
+Concretement, `2 * 3 + 4 * 5` ne genere aucune instruction arithmetique - juste
+un `movl $26` dans le code assembleur.
+
+Voici la couverture precise du constant folding :
+
+| Operation | Types supportes | Exemple |
+|-----------|----------------|---------|
+| `+`, `-`, `*`, `/` | int, double | `3 * 4` -> `12` |
+| `%` | int seulement | `17 % 5` -> `2` |
+| `&`, `\|`, `^` | int seulement | `0xFF & 0x0F` -> `0x0F` |
+| `<<`, `>>` | int seulement | `1 << 3` -> `8` |
+| `==`, `!=`, `<`, `<=`, `>`, `>=` | int seulement (PAS double) | `3 < 5` -> `1` |
+| Moins unaire `-` | int, double | `-(5)` -> `-5` |
+| NOT logique `!` | int, double | `!0` -> `1` |
+
+**Simplifications algebriques** en plus du folding pur :
+- `x + 0` -> `x` (et `0 + x` -> `x`)
+- `x * 1` -> `x`
+- `x * 0` -> `0`
+- `x - 0` -> `x`
+
+**Ce qui n'est PAS folde** :
+- L'indexation de tableaux : l'adresse est toujours materialisee
+- Les arguments de fonctions : toujours materialises
+- Les affectations composees (`+=`, etc.) : pas de folding sur l'operation
+
+**Ternaire et logique** :
+- Si la condition du ternaire est constante, seule la branche prise est generee
+  (dead code elimination). `1 ? a : b` ne genere que le code pour `a`.
+- `0 && x` -> `0` sans evaluer `x`. `1 || x` -> `1` sans evaluer `x`.
+  C'est du short-circuit au moment de la compilation.
+
+### Propagation de constantes
+
+En plus du folding, on maintient une `constMap` (`map<string, int>`) pendant la generation IR
+qui associe chaque variable a sa valeur constante connue.
+
+Le principe :
+- Quand on ecrit `x = 5`, on enregistre `constMap["x"] = 5`
+- Quand on lit `x` et qu'il est dans la constMap, on retourne directement la constante
+  au lieu de lire la variable. Ca permet au constant folding de se declencher en cascade.
+- Quand on fait une affectation non-constante (`x = f()`), on invalide l'entree
+
+Exemple concret :
 ```c
-int add(int a, int b) { return a + b; }
-int addFour(int a, int b, int c, int d) {
-    int sum1 = add(a, b);
-    int sum2 = add(c, d);
-    return add(sum1, sum2);
-}
-int main() { return addFour(10, 20, 30, 40); }  /* → 100 */
+int x = 5;           // constMap: {x: 5}
+int y = x + 3;       // x propage -> 5+3 -> folde en 8, constMap: {x:5, y:8}
+int z = y * 2;       // y propage -> 8*2 -> folde en 16
+return z;             // -> movl $16 directement, zero calcul a l'execution
 ```
 
-**Fichiers modifiés** : `ifcc.g4`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `main.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`, `CodeGenVisitor.h`, `CodeGenVisitor.cpp`
+**Limitations importantes** :
+- INT seulement (pas de propagation pour les double)
+- Le retour de fonction est toujours traite comme non-constant
+- Pas de propagation a travers les appels de fonction
 
----
+**Analyse de data-flow pour les structures de controle** :
 
-### 4.12 — Compiler le if...else
+C'est la partie la plus delicate. On ne peut pas juste propager les constantes a travers
+un `if/else` ou une boucle sans precautions.
 
-**Objectif** : Supporter les structures conditionnelles et les opérateurs de comparaison.
+Pour `if/else` : on collecte statiquement (via `collectAssignedVars`) toutes les variables
+modifiees dans les deux branches AVANT de les visiter. Chaque branche part d'une copie de
+la constMap. Apres le if, on restaure l'etat d'avant et on invalide toutes les variables
+potentiellement modifiees. Approche conservative mais sure.
 
-**Implémentation** :
-- **Grammaire** :
-  - `block : '{' statement* '}'` — blocs d'instructions entre accolades.
-  - `ifStmt : 'if' '(' expr ')' statement ('else' statement)?` — conditionnelles.
-  - Opérateurs relationnels (`<`, `>`, `<=`, `>=`) et d'égalité (`==`, `!=`) dans les expressions.
-- **Nouvelles instructions IR** : `cmp_neq`, `cmp_gt`, `cmp_ge` ajoutées à l'enum `IRInstr::Operation`, avec génération assembleur (`setne`, `setg`, `setge`).
-- **Visiteur `visitIfStmt`** :
-  1. Évalue la condition → résultat stocké dans `test_var_name` du BasicBlock courant.
-  2. Crée 3 BasicBlocks : `bb_true`, `bb_false` (optionnel), `bb_end`.
-  3. Le bloc courant branche : `exit_true → bb_true`, `exit_false → bb_false` (ou `bb_end`).
-  4. Après le corps du `if`, saut inconditionnel vers `bb_end`.
-- **Génération assembleur des sauts** (déjà dans `BasicBlock::gen_asm`) :
-  ```asm
-  cmpl $0, <test_var>
-  je <exit_false_label>
-  jmp <exit_true_label>
-  ```
-- **Gestion du `has_return`** : si un bloc contient un `return`, il ne doit pas générer de saut vers `bb_end` (pour éviter les boucles infinies en récursion).
+Pour `while`, `for`, `do-while` : on collecte les variables modifiees dans le corps AVANT
+d'entrer dans la boucle, et on les invalide immediatement (parce que le corps peut s'executer
+0 ou N fois, et la condition est reevaluee a chaque iteration).
 
-**Exemple testé** : Fonction factorielle récursive → `factorial(5) = 120` ✅
 
-**Fichiers modifiés** : `ifcc.g4`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
+## Verifications semantiques (Passe 1)
 
----
+Le `SymbolTableVisitor` fait ces checks avant toute generation de code :
 
-### 4.13 — Gestion du return n'importe où
+- Variable utilisee avant declaration -> erreur
+- Redeclaration dans le meme scope -> erreur
+- Variable declaree mais jamais utilisee -> warning
+- Fonction redefinie -> erreur
+- Appel avec le mauvais nombre d'arguments -> erreur
+- Pas de `main()` -> erreur
+- `break` ou `continue` en dehors d'une boucle -> erreur
+- Declaration d'une variable de type `void` -> erreur
 
-**Objectif** : Permettre plusieurs `return` dans une même fonction, avec un seul épilogue.
+Les fonctions externes (`putchar`, `getchar`) sont reconnues et ne declenchent pas
+d'erreur "fonction non definie". Les fonctions definies mais jamais appelees (sauf `main`)
+generent un warning.
 
-**Implémentation** :
-- **Grammaire** : `return_stmt` retiré de la fin obligatoire de `function_def`. C'est désormais un `statement` comme un autre.
-- **Exit BB unique** : chaque `CFG` possède un `exit_bb` (`.LBB_funcName_exit`) créé au début de `visitFunction_def`. C'est le **seul** bloc qui génère l'épilogue (`movl !retval, %eax; leave; ret`).
-- **`visitReturn_stmt`** : évalue l'expression, copie dans `!retval`, fait un `jmp` vers `exit_bb`, puis crée un nouveau BB "mort" pour le code après le return.
-- **Séparation des compteurs** : `nextBBnumber` (pour les labels de blocs) et `nextTempVarIndex` (pour les variables temporaires) ont été séparés pour éviter des collisions de noms.
 
-**Exemple testé** :
-```c
-int classify(int x) {
-    if (x == 0) { return 0; }
-    if (x > 0) { return 1; }
-    return 2;
-}
-```
-→ Tous les `return` sautent vers le même épilogue. Résultat identique à GCC.
+## Backend ARM64
 
-**Fichiers modifiés** : `ifcc.g4`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `CodeGenVisitor.cpp`
+Le reciblage ARM64 a ete fait en ajoutant des methodes `gen_asm_arm64` a chaque niveau
+(IRInstr, BasicBlock, CFG) qui sont appelees a la place des methodes x86 quand `cfg->target == "arm64"`.
 
----
+Differences principales avec x86-64 :
 
-### 4.14 — Compiler les boucles while
-
-**Objectif** : Supporter la boucle `while`.
-
-**Implémentation** :
-- **Grammaire** : `whileStmt : 'while' '(' expr ')' statement ;`
-- **Visiteur `visitWhileStmt`** — crée 3 BasicBlocks :
-  1. `bb_cond` : évalue la condition, branche vers `bb_body` (vrai) ou `bb_end` (faux).
-  2. `bb_body` : exécute le corps, puis **revient à `bb_cond`** (c'est la seule différence avec le `if` !).
-  3. `bb_end` : suite du programme.
-
-**Micro-tâche** : comme le dit le sujet, une fois le `if` en place, le `while` est une question de minutes. L'infrastructure des BasicBlocks est identique — seul le saut de retour diffère.
-
-**Exemple testé** : Factorielle itérative → `factorial_iter(5) = 120` ✅
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-### 4.15 — Vérifications statiques sur les fonctions
-
-**Objectif** : Détecter les erreurs sémantiques liées aux fonctions.
-
-**Implémentation** dans `SymbolTableVisitor` :
-- **Registre des fonctions** : `map<string, int> functionRegistry` stocke chaque fonction définie et son nombre de paramètres.
-- **Passe 1** (`visitProg`) : enregistre toutes les fonctions avant de visiter les corps.
-- **Passe 2** : visite chaque corps de fonction (vérifie les variables locales).
-- **Passe 3** : vérifications globales après toutes les visites.
-
-| Vérification | Type | Détail |
-|--|--|--|
-| Fonction appelée mais jamais définie | **erreur** | Sauf fonctions externes (`putchar`, `getchar`) |
-| Mauvais nombre d'arguments | **erreur** | Compare avec le registre |
-| Double définition de fonction | **erreur** | Même nom défini deux fois |
-| Fonction définie mais jamais appelée | **warning** | Sauf `main` |
-
-**Fichiers modifiés** : `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
-
----
-
-### 4.16 — Propagation des variables constantes (avec analyse du data-flow)
-
-**Objectif** : Propager les valeurs constantes connues à travers les variables pour déclencher davantage de constant folding en cascade.
-
-**Principe** :
-- On maintient une table `constMap` (`map<string, int>`) qui associe chaque variable à sa valeur constante connue pendant la visite de l'AST.
-- Lors d'une affectation `x = 5`, on enregistre `constMap["x"] = 5`.
-- Lors de la lecture d'une variable (`visitVarExpr`), si elle est dans `constMap`, on retourne directement un `ExprValue` constant au lieu de lire la variable. Cela déclenche du constant folding en cascade avec les optimisations de la tâche 4.9.
-- Lors d'une affectation non-constante (`x = f()`), on invalide `constMap["x"]`.
-
-**Analyse data-flow pour if/else et while** :
-- **`visitIfStmt`** : on collecte statiquement (via `collectAssignedVars`) toutes les variables modifiées dans les deux branches *avant* de les visiter. Chaque branche part d'une copie de la `constMap` d'avant le `if`. Après le `if`, on restaure l'état d'avant et on invalide toutes les variables potentiellement modifiées (approche conservative).
-- **`visitWhileStmt`** : on collecte les variables modifiées dans le corps *avant* de visiter quoi que ce soit, puis on les invalide immédiatement dans la `constMap` (car le corps peut s'exécuter 0 ou N fois, et la condition est réévaluée à chaque itération).
-- **`collectAssignedVars`** : fonction utilitaire qui parcourt récursivement un sous-arbre AST pour trouver toutes les déclarations et affectations (via `dynamic_cast` sur `AffectationContext` et `DeclarationContext`).
-
-**Exemple** :
-```c
-int main() {
-    int x = 5;           // constMap: {x: 5}
-    int y = x + 3;       // x propagé → 5+3 → replié en 8, constMap: {x: 5, y: 8}
-    int z = y * 2;       // y propagé → 8*2 → replié en 16, constMap: {x: 5, y: 8, z: 16}
-    return z;             // → movl $16 directement, aucun calcul à l'exécution
-}
-```
-
-**Bonus** : constant folding étendu aux comparaisons (`visitEqExpr`, `visitRelExpr`) — si les deux opérandes sont des constantes propagées, le résultat de la comparaison est calculé à la compilation.
-
-**Fichiers modifiés** : `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-### 4.17 — Support des flottants et inférence de type
-
-**Objectif** : Ajouter le type `double` au compilateur avec les conversions implicites entre `int` et `double`.
-
-**Implémentation** :
-
-#### Extension de la grammaire (`ifcc.g4`)
-- `function_def : type VAR '(' parameters? ')' ...` — le type de retour est désormais `int` ou `double`.
-- `parameters : type VAR (',' type VAR)*` — chaque paramètre a un type explicite.
-- `declaration : type VAR '=' expr` — idem pour les déclarations.
-- `type : 'int' | 'double'` — nouvelle règle de type.
-- `CONST_DOUBLE : [0-9]+ '.' [0-9]* | '.' [0-9]+` — nouveau token pour les littéraux flottants (ex: `3.14`, `.5`).
-- `expr` : ajout de `constDoubleExpr` et remplacement de `mulExpr` par `mulDivExpr` (ajout de la division `/`).
-
-#### Gestion des types (`type.h`)
-- Ajout de `DOUBLE` dans l'enum `Type`.
-- `typeSize(Type t)` : retourne 4 pour `INT`, 8 pour `DOUBLE`.
-- `promoteType(Type a, Type b)` : retourne `DOUBLE` si l'un des deux est `DOUBLE` (promotion implicite C).
-
-#### Gestion des offsets dans l'AR (`IR.cpp`)
-- `add_to_symbol_table` aligne les `double` sur 8 octets avant d'allouer.
-- Les `double` occupent 8 octets sur la pile au lieu de 4.
-
-#### Nouvelles instructions IR (`IR.h`, `IR.cpp`)
-| Instruction | Assembleur | Description |
-|---|---|---|
-| `ldconst_double` | `movsd label(%rip), %xmm0` | Charge un double depuis `.rodata` |
-| `copy_double` | `movsd src, %xmm0; movsd %xmm0, dest` | Copie un double |
-| `add_double` | `addsd` | Addition de doubles |
-| `sub_double` | `subsd` | Soustraction de doubles |
-| `mul_double` | `mulsd` | Multiplication de doubles |
-| `div_double` | `divsd` | Division de doubles |
-| `div_int` | `cltd; idivl` | Division entière signée |
-| `int_to_double` | `cvtsi2sdl` | Conversion int → double |
-| `double_to_int` | `cvttsd2si` | Conversion double → int (troncature) |
-
-#### Constantes double en `.rodata`
-Les constantes `double` sont stockées dans la section `.rodata` avec leur représentation binaire IEEE 754 (`.quad`). Chaque CFG maintient un vecteur `doubleConstants` de paires `(label, valeur)`.
-
-#### Inférence de type dans le visiteur (`IRGenVisitor.cpp`)
-- `ExprValue` étendu avec `dvalue` (double) et `type` (INT ou DOUBLE).
-- **Arithmétique** : `promoteType(left.type, right.type)` détermine le type résultat. Si les types diffèrent, `emitConversion()` insère une instruction `int_to_double` ou `double_to_int`.
-- **Déclaration/affectation** : conversion implicite si le type de l'expression ne correspond pas au type de la variable (ex: `int x = 3.14` → troncature, `double y = 5` → promotion).
-- **Return** : conversion implicite vers le type de retour de la fonction.
-- **Constant folding** : étendu aux doubles (ex: `3.14 * 2.0` → replié en `6.28` à la compilation).
-- **Comparaisons** : les opérandes sont promus au type commun avant la comparaison.
-
-**Exemple** :
-```c
-double circleArea(int r) {
-    double pi = 3.14159;
-    return pi * r * r;    // r est promu en double implicitement (cvtsi2sdl)
-}
-int main() {
-    int area = circleArea(5);  // le double retourné est tronqué en int
-    return area;               // → 78
-}
-```
-
-**Fichiers modifiés** : `ifcc.g4`, `type.h`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
-
----
-
-### 4.18 — Affectation à une lvalue quelconque
-
-**Objectif** : Mettre en place une architecture générique pour l'affectation, où le côté gauche (lvalue) est évalué pour produire une **adresse mémoire**, et le côté droit (rvalue) est évalué pour produire une **valeur**. L'affectation revient alors à un simple `wmem(addr, val)`.
-
-**Principe du cours** : le compilateur sépare clairement :
-1. **Évaluation de la rvalue** : l'expression à droite du `=` est évaluée normalement, produisant une valeur dans un temporaire.
-2. **Évaluation de la lvalue** : l'expression à gauche du `=` est évaluée pour produire l'**adresse** de l'emplacement cible (via `leaq` en x86).
-3. **Écriture en mémoire** : `wmem(addr, val)` écrit la valeur à l'adresse calculée.
-
-**Implémentation** :
-
-#### Extension de la grammaire (`ifcc.g4`)
-```antlr
-affectation : lvalue '=' expr ;
-lvalue : VAR ;   // extensible à d'autres formes (tableaux, déréférencements…)
-```
-La règle `lvalue` est une indirection qui permet d'ajouter facilement d'autres formes de lvalues plus tard (accès tableau, déréférencement de pointeur, etc.).
-
-#### Nouvelles structures (`IRGenVisitor.h`)
-- `LvalueResult` : contient `addrVar` (variable temporaire avec l'adresse de la lvalue) et `type` (type de la valeur pointée).
-
-#### Nouvelles instructions IR (`IR.h`, `IR.cpp`)
-| Instruction | Assembleur | Description |
-|---|---|---|
-| `lea` | `leaq src(%rbp), %rax; movq %rax, dest` | Charge l'adresse effective d'une variable dans un temporaire |
-| `wmem` | `movq addr, %rax; movl val, %ecx; movl %ecx, (%rax)` | Écrit un int à l'adresse contenue dans le temporaire |
-| `wmem_double` | `movq addr, %rax; movsd val, %xmm0; movsd %xmm0, (%rax)` | Écrit un double à l'adresse contenue dans le temporaire |
-
-#### Nouveau type `ADDR` (`type.h`)
-Le type `ADDR` (8 octets) est ajouté pour les temporaires contenant des adresses (pointeurs). Il est aligné sur 8 octets comme les doubles.
-
-#### Correction de l'allocation mémoire (`IR.cpp`)
-Le passage à des temporaires de 8 octets (adresses) a révélé un bug de chevauchement mémoire dans la convention d'offsets : `movq -I(%rbp)` écrit 8 octets **vers les adresses croissantes** (vers `%rbp`), ce qui pouvait écraser les variables voisines. La correction consiste à stocker dans `SymbolIndex` le bord **supérieur** de l'allocation (côté `%rbp`) :
-
-```cpp
-nextFreeSymbolIndex += size;           // réserver l'espace d'abord
-SymbolIndex[name] = nextFreeSymbolIndex; // index = bord supérieur
-```
-
-#### Visiteur `visitAffectation` (`IRGenVisitor.cpp`)
-Le nouveau `visitAffectation` suit le schéma générique :
-1. Évaluer la rvalue → `ExprValue` (avec constant folding si possible)
-2. Évaluer la lvalue → `LvalueResult` (adresse via `lea`)
-3. Conversion implicite de type si nécessaire
-4. Matérialiser la rvalue dans un temporaire
-5. Émettre `wmem(addr, val)` ou `wmem_double(addr, val)`
-
-**Exemple** : pour `x = x + 1` où `x` est à `-8(%rbp)` :
-```asm
-leaq -8(%rbp), %rax       # calcul de l'adresse de x
-movq %rax, -16(%rbp)       # stocker l'adresse dans un temp
-movl -8(%rbp), %eax        # charger x
-addl $1, %eax              # x + 1
-movl %eax, -20(%rbp)       # stocker le résultat dans un temp
-movq -16(%rbp), %rax       # recharger l'adresse
-movl -20(%rbp), %ecx       # charger la valeur
-movl %ecx, (%rax)          # écrire dans x via l'adresse
-```
-
-**Tests** : tous les tests d'affectation existants passent sans régression (déclarations, affectations simples, chaînes d'affectation, swap, while avec affectation, etc.).
-
-**Fichiers modifiés** : `ifcc.g4`, `type.h`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`, `CodeGenVisitor.cpp`
-
----
-
-### 4.19 — Tableaux unidimensionnels
-
-**Objectif** : Permettre la déclaration de tableaux de taille constante et l'accès à leurs éléments.
-
-**Implémentation** :
-- **Grammaire** (`ifcc.g4`) :
-  - `declaration_array : type VAR '[' CONST ']' ';'`
-  - `lvalue_array : VAR '[' expr ']'`
-  - `arrayAccessExpr : VAR '[' expr ']'`
-- **Gestion Mémoire (`IR.cpp`)** : 
-  - Ajout de `add_array_to_symbol_table` qui alloue `$taille_element * nb_elements` sur la pile (aligné sur 8 octets pour les `double`).
-- **Évaluation `ArrayAccessExpr` (rvalue)** : 
-  1. On évalue l'expression de l'index.
-  2. On calcule physiquement l'offset mémoire : `offset_temporaire = index_temporaire * taille_element`.
-  3. L'instruction IR `add_addr` décale l'adresse de base du tableau avec cet offset pour obtenir l'adresse de l'élément : `addr_element = addr_base + offset`.
-  4. On émet un `rmem` (ou `rmem_double`) pour charger la valeur contenue à cette adresse depuis la pile vers un registre temporaire.
-- **Affectation tableau (`LvalueArray`)** : Grâce à la généricité de l'étape 4.18, `visitLvalueArray` évalue l'index, calcule l'adresse en mémoire et génère l'adresse temporaire. L'affectation utilise alors l'instruction de base `wmem`.
-
-**Exemple testé** :
-```c
-int a[5]; 
-a[2] = 42; 
-return a[2];  /* Return 42 */
-```
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.cpp`, `IR.h`, `IR.cpp`
-
----
-
-### 4.20 — Appels de fonction ayant plus de 6 arguments
-
-**Objectif** : Respecter pleinement l'ABI System V AMD64 qui spécifie que les 6 premiers arguments passent par les registres et que les suivants sont empilés.
-
-**Implémentation** :
-- **Appelant (`IRInstr::call` dans `IR.cpp`)** :
-  - Identifie s'il y a plus de 6 arguments.
-  - S'il y a un nombre impair d'arguments sur la pile (par exemple le 7ème), l'ABI impose d'aligner `%rsp` sur 16 octets _avant_ le `call`. Le compilateur génère donc un `subq $8, %rsp`.
-  - Empile les arguments à partir du 7e, **de la droite vers la gauche**, via la séquence `movslq src, %rax` ; `pushq %rax`.
-  - Charge les 6 premiers arguments dans les registres classiques.
-  - Exécute l'instruction `call`.
-  - Nettoie sa propre pile de paramètres en réajustant le stack pointer : `addq $TotalStackParamsSize, %rsp`.
-- **Appelé (`IRGenVisitor::visitFunction_def`)** :
-  - Les 6 premiers paramètres sont transférés depuis les registres vers la pile locale (-X(%rbp)).
-  - Les paramètres restants (index 6, 7...) utilisent une adresse *positive* basée sur le ressentiment depuis la pile (caller-stack frame). Ils sont identifiés par les pseudo-registres `!param6`, `!param7`, etc.
-  - La fonction `IR_reg_to_asm` lit l'identifiant `!paramX` et le traduit statiquement en l'offset mémoire positif correspondant : `16 + (X-6)*8 (%rbp)`.
-
-**Exemple testé** : `my_sum_10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)` testé avec succès (return 55).
-
-**Fichiers modifiés** : `IR.cpp`, `IRGenVisitor.cpp`
-
----
-
-### 4.21 — Compatibilité ANTLR C++17 (std::any)
-
-**Objectif** : Résoudre les problèmes de compilation (`error: ‘class std::any’ has no member named ‘as’`) causés par le passage d'ANTLR 4.9 à ANTLR 4.10+.
-
-**Contexte** : 
-Historiquement, la classe de retour de l'AST dans le runtime C++ d'ANTLR4 était une classe maison nommée `antlrcpp::Any`, qui se lisait avec la méthode `.as<T>()`. Depuis la version 4.10 (et avec la norme C++17), ANTLR a remplacé cette classe propriétaire par le standard `std::any`, qui force l'utilisation de `std::any_cast<T>(...)`. 
-Ce changement brutal d'API créait une asymétrie entre les environnements locaux (ayant potentiellement d'anciennes versions d'ANTLR4) et les serveurs CI/CD récents (Ubuntu 22.04), empêchant le pipeline GitHub Actions de compiler le compilateur.
-
-**Implémentation** :
-- **Wrapper générique hybride** : Ajout d'une fonction template `castAny<T>` en haut de `IRGenVisitor.cpp` exploitant le `if constexpr` du C++17.
-- Si le compilateur C++ détecte que `AnyType` est un alias transparent de `std::any` (ANTLR 4.10+), la fonction appelle `std::any_cast<T>(a)`.
-- Si c'est l'ancienne classe personnalisée locale, la fonction appelle `a.template as<T>()`.
-- Remplacement de tous les appels problématiques (ex: `this->visit().as<ExprValue>()`) par le nouveau wrapper (`castAny<ExprValue>(this->visit())`).
-
-Cette modification *zéro overhead* permet au compilateur de compiler silencieusement sous n'importe quelle version du run-time ANTLR C++ distribuée sur les 5 dernières années, tout en garantissant le fonctionnement sans échec de la CI GitHub Actions.
-
-**Fichiers modifiés** : `IRGenVisitor.cpp`
-
----
-
-### Nouvelles fonctionnalités facultatives
-
-#### Boucle `for`
-
-**Objectif** : Supporter la boucle `for` classique du C.
-
-**Implémentation** :
-- **Grammaire** : `forStmt : 'for' '(' (declaration | expr)? ';' expr? ';' expr? ')' statement ;`
-- Le `for` est essentiellement un sucre syntaxique décomposé en 4 BasicBlocks : init → condition → body → update → condition.
-- Le bloc `for` ouvre et ferme un scope (pour les variables déclarées dans l'init, comme `for (int i = 0; ...)`).
-- L'expression `update` (3ème partie) est évaluée dans un bloc séparé pour permettre `continue` de sauter vers l'update plutôt que la condition.
-
-**Exemple** : `for (int i = 0; i < 10; ++i) { sum += i; }`
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
-
----
-
-#### `break` et `continue`
-
-**Objectif** : Supporter les instructions de contrôle de boucle.
-
-**Implémentation** :
-- **Pile de contextes de boucle** (`loopStack`) dans `IRGenVisitor` : chaque boucle (`while`, `for`) empile un `LoopContext` contenant les pointeurs vers le bloc condition (pour `continue`) et le bloc de sortie (pour `break`).
-- `break` : saut vers `loopStack.back().bb_end`, création d'un bloc mort.
-- `continue` : saut vers `loopStack.back().bb_cond` (ou `bb_update` pour `for`).
-- **Analyse sémantique** : `SymbolTableVisitor` maintient un `loopDepth` et rejette `break`/`continue` en dehors d'une boucle.
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
-
----
-
-#### Opérateurs logiques paresseux `&&` et `||`
-
-**Objectif** : Supporter l'évaluation court-circuit (short-circuit evaluation).
-
-**Implémentation** :
-- `&&` : évalue le premier opérande. S'il est faux (0), le résultat est 0 sans évaluer le second opérande. Sinon, évalue le second et retourne `(second != 0) ? 1 : 0`.
-- `||` : évalue le premier opérande. S'il est vrai (non-0), le résultat est 1. Sinon, évalue le second.
-- Chaque opérateur crée 2 BasicBlocks : un pour évaluer le second opérande, un pour la suite.
-- Constant folding : `0 && x` → `0`, `1 || x` → `1` sans générer de code.
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-#### Opérateurs d'affectation composée `+=`, `-=`, `*=`, `/=`, `%=`
-
-**Objectif** : Supporter les opérateurs d'affectation composée.
-
-**Implémentation** :
-- Chaque opérateur est une alternative séparée dans la grammaire (pour éviter l'explosion d'états DFA).
-- Un helper `emitCompoundAssign` factorise la logique : lire la valeur actuelle de la lvalue, appliquer l'opération, écrire le résultat.
-- Exemple : `x += 5` → `leaq x, addr; rmem addr → tmp; add tmp, 5 → result; wmem addr, result`.
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-#### Opérateurs d'incrémentation `++` et décrémentation `--`
-
-**Objectif** : Supporter `++x` (pré-incrémentation, expression) et `x++` (post-incrémentation, statement).
-
-**Implémentation** :
-- `++x` et `--x` sont des expressions : ils retournent la nouvelle valeur.
-- `x++` et `x--` sont des statements (pour éviter l'explosion d'états DFA côté parser) : `postIncStmt : VAR '++' ';'`.
-- Mécanisme : `lea` pour obtenir l'adresse, `rmem` pour lire, `add`/`sub` 1, `wmem` pour écrire.
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.h`, `SymbolTableVisitor.cpp`
-
----
-
-#### Opérateurs de décalage `<<` et `>>`
-
-**Objectif** : Supporter les décalages bit-à-bit.
-
-**Implémentation** :
-- Nouvelles instructions IR : `shl` et `shr`.
-- Assembleur : `sall %cl, %eax` (shift left) et `sarl %cl, %eax` (shift right arithmétique).
-- Constant folding : deux constantes → calcul à la compilation.
-
-**Fichiers modifiés** : `ifcc.g4`, `IR.h`, `IR.cpp`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-## Instructions IR supportées
-
-| Instruction | Assembleur généré | Description |
-|-------------|-------------------|-------------|
-| `ldconst` | `movl $C, dest` | Charger une constante int |
-| `ldconst_double` | `movsd label(%rip), dest` | Charger une constante double depuis `.rodata` |
-| `copy` | `movl src, %eax; movl %eax, dest` | Copie entre variables int |
-| `copy_double` | `movsd src, %xmm0; movsd %xmm0, dest` | Copie entre variables double |
-| `add` | `movl + addl` | Addition int |
-| `sub` | `movl + subl` | Soustraction int |
-| `mul` | `movl + imull` | Multiplication int |
-| `div_int` | `cltd + idivl` | Division entière signée |
-| `mod_int` | `cltd + idivl` | Modulo entier (résultat dans `%edx`) |
-| `add_double` | `movsd + addsd` | Addition double |
-| `sub_double` | `movsd + subsd` | Soustraction double |
-| `mul_double` | `movsd + mulsd` | Multiplication double |
-| `div_double` | `movsd + divsd` | Division double |
-| `int_to_double` | `cvtsi2sdl` | Conversion int → double |
-| `double_to_int` | `cvttsd2si` | Conversion double → int (troncature) |
-| `cmp_eq` | `cmpl + sete` | Égalité (`==`) |
-| `cmp_neq` | `cmpl + setne` | Inégalité (`!=`) |
-| `cmp_lt` | `cmpl + setl` | Inférieur (`<`) |
-| `cmp_le` | `cmpl + setle` | Inférieur ou égal (`<=`) |
-| `cmp_gt` | `cmpl + setg` | Supérieur (`>`) |
-| `cmp_ge` | `cmpl + setge` | Supérieur ou égal (`>=`) |
-| `bit_and` | `andl` | AND bit-à-bit |
-| `bit_xor` | `xorl` | XOR bit-à-bit |
-| `bit_or` | `orl` | OR bit-à-bit |
-| `shl` | `sall %cl` | Décalage à gauche (`<<`) |
-| `shr` | `sarl %cl` | Décalage à droite arithmétique (`>>`) |
-| `logical_not` | `cmpl $0 + sete` | NOT logique (`!`) |
-| `call` | `movl args → regs; call func` | Appel de fonction (ABI System V) |
-| `lea` | `leaq src(%rbp), %rax` | Charge l'adresse effective |
-| `rmem` | `movq addr; movl (%rax)` | Lit un int depuis une adresse |
-| `wmem` | `movq addr; movl val, (%rax)` | Écrit un int à l'adresse |
-| `wmem_double` | `movq addr; movsd val, (%rax)` | Écrit un double à l'adresse |
-| `add_addr` | `addq` | Arithmétique d'adresse (tableaux) |
-
----
-
-#### `switch/case`
-
-**Objectif** : Supporter la structure `switch/case` du C.
-
-**Implémentation** :
-- **Grammaire** : `switchStmt : 'switch' '(' expr ')' '{' switchCase* defaultCase? '}'`
-- Chaque `case` génère un BasicBlock avec une comparaison `cmp_eq` entre la valeur du switch et la constante du case.
-- `break` à la fin d'un case saute au bloc de sortie via le `loopStack` (partagé avec les boucles).
-- Le `default` est un bloc de repli si aucun case ne correspond.
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`, `SymbolTableVisitor.cpp`
-
----
-
-#### Boucle `do-while`
-
-**Objectif** : Supporter la boucle `do { ... } while (cond)`.
-
-**Implémentation** :
-- **Grammaire** : `doWhileStmt : 'do' statement 'while' '(' expr ')' ';'`
-- Différence avec `while` : le corps est exécuté **avant** le premier test de la condition.
-- Structure en BasicBlocks : `bb_body` → `bb_cond` → (`bb_body` si vrai | `bb_end` si faux).
-- `break`/`continue` fonctionnent via le même `loopStack`.
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-#### Opérateur ternaire `? :`
-
-**Objectif** : Supporter l'expression conditionnelle `cond ? val_vrai : val_faux`.
-
-**Implémentation** :
-- **Grammaire** : `ternaryExpr : expr '?' expr ':' expr` avec associativité droite.
-- Crée 3 BasicBlocks : évaluation de la condition → branche vraie → branche fausse → suite.
-- Le résultat est écrit dans une variable temporaire commune aux deux branches.
-- Constant folding : si la condition est constante, seule la branche correspondante est générée.
-
-**Fichiers modifiés** : `ifcc.g4`, `IRGenVisitor.h`, `IRGenVisitor.cpp`
-
----
-
-### Reciblage ARM64
-
-**Objectif** : Générer de l'assembleur ARM64 (Apple Silicon / Linux ARM) depuis le même IR, sans modifier le front-end.
-
-**Principe** : à l'étape de génération d'assembleur (`gen_asm()`), chaque `CFG` connaît sa cible (`target = "x86"` ou `"arm64"`). Chaque instruction IR dispatchs vers sa méthode de génération correspondante.
-
-**Différences majeures ARM64 vs x86-64** :
-
-| Aspect | x86-64 | ARM64 |
-|--------|--------|-------|
+| | x86-64 | ARM64 |
+|---|--------|-------|
 | Frame pointer | `%rbp` | `x29` |
-| Link register | (dans la pile) | `x30` |
+| Link register | empile | `x30` |
 | Prologue | `pushq %rbp; movq %rsp, %rbp` | `stp x29, x30, [sp, #-16]!; mov x29, sp` |
-| Épilogue | `leave; ret` | `ldp x29, x30, [sp], #16; ret` |
-| Chargement variable | `movl -8(%rbp), %eax` | `ldur w0, [x29, #-8]` |
-| Écriture variable | `movl %eax, -8(%rbp)` | `stur w0, [x29, #-8]` |
-| Appel de fonction | `call foo` | `bl foo` |
+| Epilogue | `leave; ret` | `ldp x29, x30, [sp], #16; ret` |
+| Load variable | `movl -8(%rbp), %eax` | `ldur w0, [x29, #-8]` |
+| Store variable | `movl %eax, -8(%rbp)` | `stur w0, [x29, #-8]` |
+| Appel | `call foo` | `bl _foo` |
 | Arguments | `%edi`, `%esi`, ... | `w0`, `w1`, ... |
-| Retour (int) | `%eax` | `w0` |
+| Retour | `%eax` | `w0` |
 
-**Gestion des grands offsets** : `ldur`/`stur` ARM64 n'acceptent pas d'offsets > 255. Un helper `arm64_load_w` utilise un registre temporaire `x11` dans ce cas :
+Un point chiant avec ARM64 : `ldur`/`stur` n'acceptent pas d'offsets > 255.
+Quand ca arrive, on passe par un registre temporaire `x11` :
 ```asm
-sub x11, x29, #320    ; offset > 255
+sub x11, x29, #320
 ldr w8, [x11]
 ```
 
-**Fichiers modifiés** : `IR.h`, `IR.cpp`, `IRGenVisitor.cpp`, `main.cpp`
+**Le backend ARM64 ne supporte PAS le type double.** Quand une instruction double est
+rencontree, un commentaire est emis dans l'assembleur mais aucun code n'est genere.
+Ca veut dire que les programmes avec des `double` ne compilent correctement qu'en x86.
 
----
 
-### Corrections de robustesse
+## Instructions IR
 
-#### Fix `5_no_return` — initialisation de `!retval`
+Voila le jeu d'instructions complet de notre IR. C'est du code 3 adresses classique.
 
-**Problème** : une fonction `int main() { 42; }` (sans `return`) retournait 255 au lieu de 0. La variable `!retval` n'était jamais écrite, sa valeur sur la pile était indéterminée.
+| Instruction IR | Assembleur x86 genere | Description |
+|---|---|---|
+| `ldconst` | `movl $C, dest` | Charge une constante int |
+| `ldconst_double` | `movsd label(%rip), dest` | Charge un double depuis `.rodata` |
+| `copy` | `movl src, %eax; movl %eax, dest` | Copie int |
+| `copy_double` | `movsd src, %xmm0; movsd %xmm0, dest` | Copie double |
+| `add` | `movl a; addl b` | Addition int |
+| `sub` | `movl a; subl b` | Soustraction int |
+| `mul` | `movl a; imull b` | Multiplication int |
+| `div_int` | `cltd; idivl` | Division entiere (quotient dans `%eax`) |
+| `mod_int` | `cltd; idivl` | Modulo entier (reste dans `%edx`) |
+| `add_double` | `addsd` | Addition double |
+| `sub_double` | `subsd` | Soustraction double |
+| `mul_double` | `mulsd` | Multiplication double |
+| `div_double` | `divsd` | Division double |
+| `int_to_double` | `cvtsi2sdl` | Conversion int -> double |
+| `double_to_int` | `cvttsd2si` | Troncature double -> int |
+| `cmp_eq` | `cmpl; sete` | Egalite |
+| `cmp_neq` | `cmpl; setne` | Inegalite |
+| `cmp_lt` | `cmpl; setl` | Inferieur strict |
+| `cmp_le` | `cmpl; setle` | Inferieur ou egal |
+| `cmp_gt` | `cmpl; setg` | Superieur strict |
+| `cmp_ge` | `cmpl; setge` | Superieur ou egal |
+| `bit_and` | `andl` | AND bit-a-bit |
+| `bit_xor` | `xorl` | XOR bit-a-bit |
+| `bit_or` | `orl` | OR bit-a-bit |
+| `shl` | `sall %cl` | Shift left |
+| `shr` | `sarl %cl` | Shift right (arithmetique) |
+| `logical_not` | `cmpl $0; sete` | NOT logique |
+| `call` | `movl args -> regs; call func` | Appel de fonction ABI System V |
+| `lea` | `leaq src(%rbp), %rax` | Charge l'adresse effective d'une variable |
+| `rmem` | `movq addr; movl (%rax)` | Lit un int depuis une adresse |
+| `rmem_double` | `movq addr; movsd (%rax)` | Lit un double depuis une adresse |
+| `wmem` | `movq addr; movl val, (%rax)` | Ecrit un int a une adresse |
+| `wmem_double` | `movq addr; movsd val, (%rax)` | Ecrit un double a une adresse |
+| `add_addr` | `addq` | Arithmetique d'adresse (pour les tableaux) |
 
-**Fix** : dans `gen_asm_prologue`, `!retval` est maintenant initialisé à 0 (`movl $0, -4(%rbp)`) dès l'entrée dans la fonction. Conforme à la norme C99 : atteindre la fin de `main` sans `return` équivaut à `return 0`.
+Les constantes `double` sont stockees dans `.rodata` en representation IEEE 754 (`.quad`).
+Chaque CFG maintient un vecteur de paires (label, valeur) pour ca.
 
-#### Fix `#include <cstdint>` dans `IR.cpp`
 
-**Problème** : `uint64_t` utilisé pour la représentation IEEE 754 des constantes double n'était pas déclaré sur certains compilateurs.
+## Architecture des lvalues
 
-**Fix** : ajout de `#include <cstdint>` dans `IR.cpp`.
+Un truc important dans le design : on a separe proprement lvalue et rvalue pour les affectations.
 
----
+L'idee (tiree du cours) : le cote gauche du `=` est evalue pour produire une **adresse**
+(via `lea`), le cote droit est evalue pour produire une **valeur**, et l'affectation se
+resume a un `wmem(addr, val)`.
 
-### Programme de démonstration — `game.c`
+Ca rend le systeme extensible : pour ajouter les tableaux, il a suffi d'implementer
+`visitLvalueArray` qui calcule l'adresse de l'element, et le reste du mecanisme d'affectation
+marche tout seul. Si on devait ajouter les pointeurs un jour, ce serait le meme principe.
 
-Un jeu de devinette de nombre compilable avec `ifcc`, conçu pour la démonstration en soutenance.
+Le type `ADDR` (8 octets) dans `type.h` est la pour les temporaires qui contiennent des
+adresses. Attention au stockage memoire : `movq` ecrit 8 octets vers les adresses
+croissantes, donc on stocke dans `SymbolIndex` le bord superieur de l'allocation pour
+eviter les chevauchements.
+
+
+## Compatibilite ANTLR
+
+Le passage d'ANTLR 4.9 a 4.10+ a change l'API : l'ancien `antlrcpp::Any` (avec `.as<T>()`)
+a ete remplace par `std::any` (avec `std::any_cast<T>()`). Pour que le compilateur marche
+sur toutes les versions sans modifier le code, on a un wrapper `castAny<T>` en haut de
+`IRGenVisitor.cpp` qui utilise `if constexpr` pour detecter le bon appel. Ca garantit que
+le CI GitHub Actions marche quelle que soit la version d'ANTLR installee.
+
+
+## Tests
+
+150 fichiers de test dans `testfiles/`, couvrant tous les features.
+
+```bash
+python3 ifcc-test.py testfiles/
+```
+
+Le script compare la sortie de `ifcc` + GCC assembleur avec la compilation directe par GCC.
+Pour chaque test, il verifie que le code de retour et la sortie standard sont identiques.
+
+La couverture inclut :
+- Retour de constantes et variables
+- Declarations, affectations simples, chaines, swap
+- Arithmetique complete (+, -, *, /, %, parentheses, priorites, moins unaire)
+- Bit-a-bit (&, ^, |, <<, >>)
+- Logique (!, &&, ||, court-circuit)
+- Comparaisons (<, >, <=, >=, ==, !=)
+- Appels de fonctions (putchar, getchar, fonctions utilisateur, >6 args)
+- Recursion, recursion mutuelle
+- Boucles while, for, do-while (avec break/continue)
+- switch/case avec break et default
+- Ternaire ? :
+- Type double avec conversions implicites
+- Tableaux 1D (int et double)
+- Scoping et shadowing
+- Operateurs composes (+=, -=, *=, /=, %=)
+- Increment/decrement (++, --)
+- Constantes char ('a', '\n')
+- Cas d'erreur (syntaxe invalide, main manquant, redeclaration, break hors boucle, etc.)
+- Return multiples dans une meme fonction
+- Programme complet (game.c)
+
+Le CI/CD est configure via GitHub Actions.
+
+
+## Demo : game.c
+
+Un jeu de devinette de nombre qui utilise un peu de tout : fonctions, recursion,
+boucle while, if/else, operateurs logiques, arithmetique, convention d'appel ABI.
 
 ```bash
 compiler/ifcc testfiles/game.c > game.s
@@ -658,7 +414,6 @@ gcc game.s -o game
 printf '10\n80\n42\n' | ./game
 ```
 
-Sortie :
 ```
 === Devinez (1-100) ===
 > Trop petit !
@@ -666,55 +421,38 @@ Sortie :
 > Bravo ! Trouve en 3 essais.
 ```
 
-Le jeu illustre en un seul programme : fonctions, récursion, boucle `while`, `&&` paresseux, `if/else`, arithmétique entière, convention d'appel ABI.
-Voir `testfiles/GAME_README.md` pour le walkthrough assembleur complet.
 
----
+## Fichiers du projet
 
-## Compilation et exécution
+| Fichier | Role |
+|---------|------|
+| `ifcc.g4` | Grammaire ANTLR4 du langage C supporte |
+| `main.cpp` | Point d'entree : enchaine les 3 passes |
+| `SymbolTableVisitor.h/.cpp` | Passe 1 - analyse semantique, scoping, registre de fonctions |
+| `IRGenVisitor.h/.cpp` | Passe 2 - generation IR, constant folding/propagation |
+| `IR.h/.cpp` | Structures IR : `IRInstr`, `BasicBlock`, `CFG` + generation assembleur |
+| `CodeGenVisitor.h/.cpp` | Ancien generateur de code (conserve mais plus utilise) |
+| `type.h` | Enum `Type` (INT, DOUBLE, VOID, ADDR), `typeSize()`, `promoteType()` |
+| `symbole.h` | Placeholder (la table des symboles est dans CFG) |
+| `config.mk` | Chemins ANTLR et options de compilation |
+| `ifcc-test.py` | Script de test (compare ifcc avec GCC) |
+| `testfiles/` | 150 programmes de test |
+| `testfiles/game.c` | Programme de demo pour la soutenance |
 
-```bash
-# Compiler le compilateur
-cd compiler
-make clean && make
 
-# Compiler un programme C
-./ifcc ../testfiles/39_recursive_factorial.c > output.s
+## Limitations
 
-# Assembler et exécuter
-gcc output.s -o output
-./output
-echo $?  # affiche le code de retour
+Ce qu'on ne supporte pas :
 
-# Lancer la suite de tests
-cd ..
-python3 ifcc-test.py testfiles/
-```
-
----
-
-## Tests
-
-La suite de tests (`ifcc-test.py`) couvre **75 cas** (75/75 passent) :
-- Retour de constantes et variables
-- Déclarations et affectations (simples, chaînes, swap)
-- Arithmétique complète (+, -, *, /, %, parenthèses, moins unaire, priorités)
-- Opérations bit-à-bit (&, ^, |, <<, >>)
-- Opérateurs logiques (!, &&, ||)
-- Comparaisons (<, >, <=, >=, ==, !=)
-- Appels de fonctions (putchar, fonctions utilisateur, >6 args)
-- Fonctions multiples avec paramètres, récursion
-- Boucles while et for (avec break/continue)
-- Types double avec conversions implicites
-- Tableaux unidimensionnels
-- Portées de variables et shadowing
-- Opérateurs composés (+=, -=, *=, /=, %=)
-- Incrémentation/décrémentation (++, --)
-- Constantes caractère ('a', '\n')
-- Boucles `do-while`
-- `switch/case` avec `break`
-- Opérateur ternaire `? :`
-- `break` et `continue` imbriqués
-- Cas d'erreur (syntaxe invalide, main manquant, no-return)
-- Return multiples (classify, abs)
-- Programme de démonstration complet (`game.c`)
+- Pas de pointeurs ni d'arithmetique de pointeurs
+- Pas de strings / `char*`
+- Pas de `struct` ni `union`
+- Pas de variables globales
+- Pas de preprocesseur (les `#include` sont juste ignores)
+- Pas de `float` (on a `double` mais pas `float`)
+- Pas de cast explicite
+- Pas de compilation separee (tout dans un seul fichier)
+- Pas de types `unsigned`
+- Tableaux : taille fixe seulement, 1D seulement
+- ARM64 : pas de support `double`
+- Post-increment/decrement : statements seulement, pas expressions

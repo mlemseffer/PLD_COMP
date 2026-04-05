@@ -282,7 +282,7 @@ antlrcpp::Any IRGenVisitor::visitAssignExpr(ifccParser::AssignExprContext *ctx) 
     // 1. Évaluer la rvalue (expression à droite du '=')
     ExprValue exprResult = castAny<ExprValue>(this->visit(ctx->expr()));
 
-    // 2. Évaluer la lvalue (expression à gauche du '=') → obtenir l'adresse cible
+    // 2. Evaluer la lvalue (expression a gauche du '=') pour obtenir l'adresse cible
     LvalueResult lv = castAny<LvalueResult>(this->visit(ctx->lvalue()));
     Type varType = lv.type;
 
@@ -436,7 +436,7 @@ antlrcpp::Any IRGenVisitor::visitConstDoubleExpr(ifccParser::ConstDoubleExprCont
 
 antlrcpp::Any IRGenVisitor::visitCharExpr(ifccParser::CharExprContext *ctx) {
     string text = ctx->CHAR_CONST()->getText();
-    // text is like 'a' or '\n' — strip the surrounding quotes
+    // text ressemble a 'a' ou '\n', on enleve les quotes
     string inner = text.substr(1, text.size() - 2);
 
     int charValue = 0;
@@ -1432,8 +1432,8 @@ antlrcpp::Any IRGenVisitor::visitDoWhileStmt(ifccParser::DoWhileStmtContext *ctx
     ExprValue cond = castAny<ExprValue>(this->visit(ctx->expr()));
     string condVar = cond.isConstant ? loadConst(cond.value) : cond.varName;
     current_cfg->current_bb->test_var_name = condVar;
-    current_cfg->current_bb->exit_true = bb_body;   // si vrai → retour au corps
-    current_cfg->current_bb->exit_false = bb_end;    // si faux → sortie
+    current_cfg->current_bb->exit_true = bb_body;   // si vrai, retour au corps
+    current_cfg->current_bb->exit_false = bb_end;    // si faux, sortie
 
     current_cfg->add_bb(bb_end);
     return 0;

@@ -1,4 +1,4 @@
-# Jeu de devinette — `game.c`
+# Jeu de devinette - `game.c`
 
 Programme de démonstration compilé avec **ifcc**, notre compilateur C maison.
 Uniquement des fonctionnalités supportées par ifcc : pas de `printf`, pas de variables globales, pas de pointeurs.
@@ -65,7 +65,7 @@ Chaque appel démontre la **convention d'appel System V AMD64** :
 
 ---
 
-### 2. Prologue / Épilogue — gestion de la pile
+### 2. Prologue / Epilogue et gestion de la pile
 
 Chaque fonction génère :
 
@@ -83,7 +83,7 @@ Les variables locales sont toutes sur la pile, accessibles via des offsets néga
 
 ---
 
-### 3. Boucle `while` — structure en blocs de base
+### 3. Boucle `while` et structure en blocs de base
 
 Dans `read_int()` et `main()`, les boucles `while` se traduisent par **3 blocs de base** :
 
@@ -136,7 +136,7 @@ movl %eax, -48(%rbp)
 cmpl $0, -48(%rbp)
 je .LBB_read_int_5          ; FAUX → court-circuit, skip la 2e condition
 
-; Bloc 2 : c <= '9'  (ASCII 57) — seulement évalué si c >= '0'
+; Bloc 2 : c <= '9'  (ASCII 57), seulement évalué si c >= '0'
 movl $57, -56(%rbp)
 movl -12(%rbp), %eax        ; recharge c
 cmpl -56(%rbp), %eax
@@ -147,7 +147,7 @@ Si `c < '0'`, le second test n'est **jamais exécuté** → sémantique C respec
 
 ---
 
-### 5. Récursion — `print_int`
+### 5. Recursion avec `print_int`
 
 ```c
 void print_int(int n) {
@@ -193,7 +193,7 @@ Montre : `imull` (multiplication), `subl` (soustraction), `addl` (addition), tou
 
 ---
 
-### 7. `if / else if / else` — branchements conditionnels
+### 7. `if / else if / else` et branchements conditionnels
 
 Dans `main()`, le `if (result == -1) ... else if (result == 1)` génère :
 
